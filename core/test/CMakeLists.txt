@@ -28,3 +28,7 @@ target_link_libraries(translatekit_core_test PRIVATE translatekit_core GTest::gt
 
 include(GoogleTest)
 gtest_discover_tests(translatekit_core_test)
+
+# Manual dev tool for interactive language-detection testing (not shipped).
+add_executable(detect_cli detect_cli.cpp)
+target_link_libraries(detect_cli PRIVATE translatekit_core)

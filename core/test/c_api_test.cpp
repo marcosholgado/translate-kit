@@ -25,11 +25,9 @@
 
 namespace {
 
-const char* kLangIdPath = "/tmp/translate-kit-test-lid.bin";  // stub ignores it
-
 tk_context* MakeContext() {
     tk_context* ctx = nullptr;
-    EXPECT_EQ(tk_init(kLangIdPath, &ctx), TK_OK);
+    EXPECT_EQ(tk_init(&ctx), TK_OK);
     EXPECT_NE(ctx, nullptr);
     return ctx;
 }
@@ -55,20 +53,50 @@ TEST(CApi, VersionIsNonEmpty) {
     EXPECT_STRNE(tk_version(), "");
 }
 
-TEST(CApi, InitRejectsNullArgs) {
-    EXPECT_EQ(tk_init(nullptr, nullptr), TK_ERR_INVALID_ARG);
-    tk_context* ctx = nullptr;
-    EXPECT_EQ(tk_init("", &ctx), TK_ERR_INVALID_ARG);
-    EXPECT_EQ(ctx, nullptr);
+TEST(CApi, InitRejectsNullOutArg) {
+    EXPECT_EQ(tk_init(nullptr), TK_ERR_INVALID_ARG);
 }
 
 TEST(CApi, DetectLanguageReturnsResult) {
     tk_context* ctx = MakeContext();
     tk_language_result r = {};
     EXPECT_EQ(tk_detect_language(ctx, "hola mundo", &r), TK_OK);
-    EXPECT_STRNE(r.language, "");  // stub yields "en"
+    EXPECT_STRNE(r.language, "");
     EXPECT_GE(r.confidence, 0.0f);
     EXPECT_LE(r.confidence, 1.0f);
+    tk_shutdown(ctx);
+}
+
+// Golden language-detection cases against the bundled CLD2 detector. Sentences
+// are long enough for CLD2 to score reliably.
+TEST(CApi, DetectLanguageGoldens) {
+    tk_context* ctx = MakeContext();
+    struct Case {
+        const char* text;
+        const char* expected;
+    };
+    const Case cases[] = {
+        {"This is a simple sentence written in the English language for testing purposes.", "en"},
+        {"Esta es una frase sencilla escrita en el idioma español para realizar algunas pruebas.", "es"},
+        {"Ceci est une phrase simple écrite en langue française afin d'effectuer quelques tests.", "fr"},
+        {"Dies ist ein einfacher Satz, der zu Testzwecken in deutscher Sprache geschrieben wurde.", "de"},
+        {"Questa è una frase semplice scritta in lingua italiana per scopi di test e verifica.", "it"},
+    };
+    for (const Case& c : cases) {
+        tk_language_result r = {};
+        ASSERT_EQ(tk_detect_language(ctx, c.text, &r), TK_OK) << c.text;
+        EXPECT_STREQ(r.language, c.expected) << "text: " << c.text;
+        EXPECT_GT(r.confidence, 0.0f) << c.text;
+    }
+    tk_shutdown(ctx);
+}
+
+TEST(CApi, DetectLanguageEmptyIsUnknown) {
+    tk_context* ctx = MakeContext();
+    tk_language_result r = {};
+    EXPECT_EQ(tk_detect_language(ctx, "", &r), TK_OK);
+    EXPECT_STREQ(r.language, "und");
+    EXPECT_FLOAT_EQ(r.confidence, 0.0f);
     tk_shutdown(ctx);
 }
 
