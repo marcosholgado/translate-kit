@@ -50,9 +50,18 @@ android {
         }
 
         ndk {
-            // arm64-v8a: real phones (ruy/NEON). x86_64: emulator/CI (intgemm/AVX2).
+            // arm64-v8a: real phones (ruy/NEON). x86_64: emulator/CI (intgemm).
             // armeabi-v7a deferred (32-bit NMT is memory-tight).
-            abiFilters 'arm64-v8a', 'x86_64'
+            //
+            // CI narrows this to a single ABI via -PtestAbi=<abi> so the emulator
+            // job builds only the engine it will actually run (skipping the other
+            // ABI's ~10-min compile). The published AAR always ships both.
+            def testAbi = project.findProperty('testAbi')
+            if (testAbi) {
+                abiFilters testAbi.toString()
+            } else {
+                abiFilters 'arm64-v8a', 'x86_64'
+            }
         }
     }
 

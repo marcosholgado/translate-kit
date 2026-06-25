@@ -40,9 +40,15 @@
 #     includes <immintrin.h>; on a normal x86 build it arrives transitively via
 #     MKL. The Android x86_64 NDK has no MKL, so include it explicitly. Needed
 #     for the x86_64 (emulator/CI) ABI.
+#   0006-marian-build-ruy-when-ruy-sgemm
+#     marian links ruy under (USE_RUY OR USE_RUY_SGEMM) but only ADDS the ruy
+#     subdirectory under USE_RUY, so enabling ruy's float sgemm alone (our x86
+#     config: int8 via intgemm, float sgemm via ruy, no MKL/OpenBLAS) references
+#     an unbuilt target. Gate the subdirectory on (USE_RUY OR USE_RUY_SGEMM) too.
+#     Needed for the x86_64 ABI: without a BLAS, marian's fallback sgemm aborts.
 #
 # Patches 0002-0004 are needed to build the engine on modern compilers / macOS
-# (the Apple target); 0005 is needed for the Android x86_64 ABI. The Android
+# (the Apple target); 0005-0006 are needed for the x86_64 ABI. The Android
 # arm64 NDK build needs only 0001 but the rest are harmless there.
 
 set -euo pipefail
