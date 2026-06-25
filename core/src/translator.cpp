@@ -71,6 +71,10 @@ std::shared_ptr<marian::Options> BuildOptions(const ModelSpec& spec) {
             ? mb::parseOptionsFromString(BaseConfigYaml(), /*validate=*/false)
             : mb::parseOptionsFromFilePath(spec.config_path, /*validate=*/false);
 
+    // We pass absolute paths from the ModelSpec, so disable marian's
+    // relative-path rooting (model configs ship with `relative-paths: true`).
+    options->set("relative-paths", false);
+
     options->set("models", std::vector<std::string>{spec.model_path});
 
     std::vector<std::string> vocabs = spec.vocab_paths;
@@ -79,6 +83,19 @@ std::shared_ptr<marian::Options> BuildOptions(const ModelSpec& spec) {
 
     // shortlist: [<lex file>, <check flag>]
     options->set("shortlist", std::vector<std::string>{spec.shortlist_path, "false"});
+
+    // Bergamot runtime keys the engine requires but a raw marian config lacks
+    // (normally injected off-device by patch-marian-for-bergamot.py; SPEC-1 §10a).
+    // marian's parser DECLARES these with defaults (so `has()` is always true and
+    // the default mini-batch-words=0 aborts BatchingPool); set them outright. These
+    // are batching/splitting runtime tuning, not model-output parameters.
+    options->set("mini-batch-words", 1024);
+    options->set("max-length-break", 128);
+    options->set("max-length-factor", 2.5f);
+    options->set("ssplit-mode", std::string("paragraph"));
+    // HTML-aware translation (detag-and-project) needs word alignments; the
+    // student models are trained with guided alignment for exactly this.
+    options->set("alignment", std::string("soft"));
 
     return options;
 }
@@ -111,6 +128,9 @@ Translator::~Translator() {
 TranslationResult Translator::translate(const std::string& input, bool is_html) const {
     mb::ResponseOptions options;
     options.HTML = is_html;
+    // HTML restore (detag-and-project) projects tags onto the target via word
+    // alignments, so request them whenever translating HTML.
+    options.alignment = is_html;
 
     std::vector<std::string> sources{input};
     std::vector<mb::ResponseOptions> perInput{options};

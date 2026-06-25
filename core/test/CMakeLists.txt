@@ -32,3 +32,15 @@ gtest_discover_tests(translatekit_core_test)
 # Manual dev tool for interactive language-detection testing (not shipped).
 add_executable(detect_cli detect_cli.cpp)
 target_link_libraries(detect_cli PRIVATE translatekit_core)
+
+# Let the tests know whether the real engine is compiled in (vs the echo stub),
+# so they assert the right behaviour.
+if(TRANSLATEKIT_WITH_ENGINE)
+    target_compile_definitions(translatekit_core_test PRIVATE TRANSLATEKIT_WITH_ENGINE=1)
+    target_compile_definitions(detect_cli PRIVATE TRANSLATEKIT_WITH_ENGINE=1)
+
+    # Manual dev tool for translation testing (only meaningful with the engine).
+    add_executable(translate_cli translate_cli.cpp)
+    target_link_libraries(translate_cli PRIVATE translatekit_core)
+    target_compile_definitions(translate_cli PRIVATE TRANSLATEKIT_WITH_ENGINE=1)
+endif()
