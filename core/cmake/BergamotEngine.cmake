@@ -77,6 +77,17 @@ function(translatekit_add_engine engine_dir)
         endif()
     endif()
 
+    # marian needs a float32 GEMM (sgemm) for batched products (attention). On
+    # ARM it routes sgemm through ruy (marian sets USE_RUY_SGEMM itself). On x86
+    # it expects MKL/OpenBLAS, and with neither present marian's fallback sgemm is
+    # a stub that aborts at the first translate (BeamSearch -> ProdBatched ->
+    # sgemm -> abort). We ship no BLAS, so route x86's float sgemm through ruy too
+    # (portable; ruy has x86 AVX2/SSE kernels). int8 stays on intgemm. Requires
+    # engine patch 0006 (marian builds ruy under USE_RUY_SGEMM, not only USE_RUY).
+    if(NOT TRANSLATEKIT_ARCH_ARM)
+        set(USE_RUY_SGEMM ON CACHE BOOL "" FORCE)
+    endif()
+
     add_subdirectory(${engine_dir} ${CMAKE_BINARY_DIR}/bergamot EXCLUDE_FROM_ALL)
 
     # The bergamot wrapper and marian itself include marian's SIMD headers.
