@@ -54,6 +54,7 @@ git submodule update --init third_party/translations
 git -C third_party/translations submodule update --init --recursive \
     inference/3rd_party/ssplit-cpp \
     inference/marian-fork/src/3rd_party/sentencepiece \
+    inference/marian-fork/src/3rd_party/intgemm \
     inference/marian-fork/src/3rd_party/ruy \
     inference/marian-fork/src/3rd_party/simd_utils
 
