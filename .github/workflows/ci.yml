@@ -118,6 +118,9 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Unit tests (JVM)
+        run: cd android && ./gradlew :translate-kit:testDebugUnitTest
+
       - name: Instrumented tests on x86_64 emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:

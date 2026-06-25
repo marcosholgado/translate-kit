@@ -85,6 +85,12 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    testOptions {
+        // JVM unit tests exercise the graceful-degradation path (no native lib on
+        // the host); let the stubbed android.util.Log no-op instead of throwing.
+        unitTests.returnDefaultValues = true
+    }
+
     kotlin {
         jvmToolchain(21)
         compilerOptions {
@@ -101,6 +107,7 @@ android {
 
 dependencies {
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.mockito:mockito-core:5.12.0'
 
     // Instrumented tests: exercise the real JNI + .so engine path on a device.
     androidTestImplementation 'androidx.test.ext:junit:1.2.1'
