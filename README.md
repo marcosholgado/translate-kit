@@ -36,7 +36,7 @@ Early development. Built in phases:
 ```
 core/        platform-agnostic C++ engine wrapper + the C ABI (include/translate_kit/translate_kit.h)
 android/     Android Gradle project — the AAR wrapper (JNI shim + Kotlin facade)
-models/      bundled data (sentence-split prefixes) — fetched by scripts/ (Phase C)
+models/      test-model fixtures (fetched by scripts/, gitignored) — debug/test only, never in the release AAR
 scripts/     cross-compile + model-fetch + engine-patch helpers
 third_party/ git submodules: cld2 (detector), translations (Bergamot engine); patches/ (engine patches)
 ```

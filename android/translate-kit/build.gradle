@@ -72,10 +72,15 @@ android {
         }
     }
 
-    // Shared bundled data (language-ID model, sentence-split prefixes) lives at
-    // the repo root so every platform wrapper can consume it.
+    // Test-model fixtures live at the repo root (shared across platform
+    // wrappers). They are scoped to the `debug` source set, NOT `main`, so the
+    // published release AAR ships no model assets — production needs none: CLD2
+    // is compiled into the .so, and NMT models are downloaded at runtime by the
+    // caller and passed in as on-disk paths. Instrumented tests run against the
+    // debug variant (testBuildType defaults to 'debug'), so they still resolve
+    // the model through the app-under-test context.
     sourceSets {
-        main {
+        debug {
             assets.srcDirs += ['../../models']
         }
     }

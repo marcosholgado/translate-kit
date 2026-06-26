@@ -1,17 +1,25 @@
-# Bundled model data
+# Test model data
 
-Shared, on-device data packaged into every platform wrapper (e.g. the Android AAR's `assets/`).
+This directory holds the **test-model fixtures** used by the test suites. It is
+*not* production data: the published release AAR ships no model assets at all.
 
-These artifacts are **fetched, not committed** (see `scripts/fetch-models.sh`); the binaries are
-`.gitignore`d. The directory is kept so the Android `assets.srcDirs` mapping resolves even before the
-fetch runs.
+These artifacts are **fetched, not committed** (see `scripts/fetch-models.sh`);
+the binaries are `.gitignore`d. The directory is kept so the Android
+`assets.srcDirs` mapping resolves even before the fetch runs.
 
-| File | Purpose | Source / License | Phase |
-|------|---------|------------------|-------|
-| `nonbreaking_prefix.<lang>` | ssplit-cpp sentence-boundary rules | ssplit-cpp, MIT | C |
+| Path | Purpose | Source / License |
+|------|---------|------------------|
+| `test-models/ende.student.tiny11/` | Tiny en→de student model — native (gtest) + instrumented translation goldens | Bergamot, CC-BY-SA-4.0 (test only) |
 
-> **Language detection needs no bundled model.** It uses CLD2, whose language profiles are compiled
-> directly into the native library (Apache-2.0).
->
-> Translation **NMT** models are NOT bundled either — they are downloaded on demand by the consuming
-> app (Spec 2) and passed to the library as on-disk paths.
+## Why nothing ships in the release AAR
+
+- **Language detection** needs no model: CLD2's language profiles are compiled
+  into the native library (Apache-2.0).
+- **Translation (NMT)** models are downloaded on demand by the consuming app and
+  passed to the library as on-disk paths — never bundled.
+- **Sentence splitting** runs in `paragraph` mode, so no `nonbreaking_prefixes`
+  files are needed.
+
+The Android module therefore maps this directory into the **`debug`** source set
+only (see `android/translate-kit/build.gradle`), so the test model reaches
+instrumented tests but never the published release AAR.
