@@ -221,6 +221,62 @@ TEST(CApi, TranslateRealModelEnDe) {
     tk_model_close(m);
     tk_shutdown(ctx);
 }
+
+// Loading a second model in the same process must succeed. marian's
+// createLoggers() registers spdlog loggers ("general", "valid") on every model
+// load, and spdlog throws when a name is already registered; without the
+// idempotent-logger engine patch the second load aborts with
+// "logger with name 'general' already exists". The app loads several models per
+// process (e.g. en->es then en->de) and pivoting needs two loaded at once.
+TEST(CApi, LoadMultipleModelsInOneProcess) {
+    const char* dir = std::getenv("TK_TEST_MODEL_DIR");
+    if (dir == nullptr || dir[0] == '\0') {
+        GTEST_SKIP() << "set TK_TEST_MODEL_DIR to the ende.student.tiny11 directory";
+    }
+    const std::string d(dir);
+    const std::string model = d + "/model.intgemm.alphas.bin";
+    const std::string vocab = d + "/vocab.deen.spm";
+    const std::string lex = d + "/lex.s2t.bin";
+    const std::string config = d + "/config.intgemm8bitalpha.yml";
+    const char* vocabs[] = {vocab.c_str()};
+
+    auto make_spec = [&]() {
+        tk_model_spec spec = {};
+        spec.source_lang = "en";
+        spec.target_lang = "de";
+        spec.model_path = model.c_str();
+        spec.vocab_paths = vocabs;
+        spec.vocab_count = 1;
+        spec.shortlist_path = lex.c_str();
+        spec.config_path = config.c_str();
+        spec.num_workers = 1;
+        return spec;
+    };
+
+    tk_context* ctx = MakeContext();
+
+    tk_model_spec spec1 = make_spec();
+    tk_model* m1 = nullptr;
+    ASSERT_EQ(tk_load_model(ctx, &spec1, &m1), TK_OK) << tk_last_error();
+
+    // The second load is the regression: it used to abort inside spdlog.
+    tk_model_spec spec2 = make_spec();
+    tk_model* m2 = nullptr;
+    ASSERT_EQ(tk_load_model(ctx, &spec2, &m2), TK_OK) << tk_last_error();
+
+    // Both handles still translate.
+    for (tk_model* m : {m1, m2}) {
+        tk_translation_result r = {};
+        ASSERT_EQ(tk_translate(m, "Hello World!", /*is_html=*/0, &r), TK_OK) << tk_last_error();
+        ASSERT_NE(r.text, nullptr);
+        EXPECT_NE(std::string(r.text).find("Hallo"), std::string::npos);
+        tk_translation_result_free(&r);
+    }
+
+    tk_model_close(m1);
+    tk_model_close(m2);
+    tk_shutdown(ctx);
+}
 #endif  // TRANSLATEKIT_WITH_ENGINE
 
 TEST(CApi, LoadModelRejectsMissingModelPath) {

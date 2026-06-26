@@ -1,0 +1,17 @@
+diff --git a/inference/marian-fork/src/common/logging.cpp b/inference/marian-fork/src/common/logging.cpp
+index c21cf420..a35b6cc7 100644
+--- a/inference/marian-fork/src/common/logging.cpp
++++ b/inference/marian-fork/src/common/logging.cpp
+@@ -37,6 +37,12 @@ std::shared_ptr<spdlog::logger> createStderrLogger(const std::string& name,
+ 
+   auto logger = std::make_shared<spdlog::logger>(name, begin(sinks), end(sinks));
+ 
++  // translate-kit: createLoggers() runs on every model load, and spdlog throws
++  // if a logger of this name is already registered -- which aborts loading a
++  // second model in the same process (switching language pairs, or pivoting,
++  // which needs two models at once). Drop any existing logger first so
++  // registration is idempotent.
++  spdlog::drop(name);
+   spdlog::register_logger(logger);
+   logger->set_pattern(pattern);
+   return logger;

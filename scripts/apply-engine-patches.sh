@@ -46,10 +46,19 @@
 #     config: int8 via intgemm, float sgemm via ruy, no MKL/OpenBLAS) references
 #     an unbuilt target. Gate the subdirectory on (USE_RUY OR USE_RUY_SGEMM) too.
 #     Needed for the x86_64 ABI: without a BLAS, marian's fallback sgemm aborts.
+#   0007-marian-idempotent-loggers
+#     marian's createLoggers() runs on every model load and registers spdlog
+#     loggers ("general", "valid") unconditionally; spdlog throws if a name is
+#     already registered, so loading a SECOND model in the same process aborts
+#     with "logger with name 'general' already exists". Drop any existing logger
+#     before registering so it is idempotent. Runtime fix needed wherever more
+#     than one model is loaded per process (switching language pairs, pivoting);
+#     all ABIs.
 #
 # Patches 0002-0004 are needed to build the engine on modern compilers / macOS
 # (the Apple target); 0005-0006 are needed for the x86_64 ABI. The Android
-# arm64 NDK build needs only 0001 but the rest are harmless there.
+# arm64 NDK build needs only 0001 to build (the other build patches are harmless
+# there); 0007 is a runtime correctness fix that matters on every target.
 
 set -euo pipefail
 
