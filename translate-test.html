@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>translate-kit page-translation test harness</title>
+<title>translate-kit page-translation test (en → es)</title>
 <style>
   * { box-sizing: border-box; }
   html, body { overflow-x: hidden; max-width: 100%; }
-  body { font-family: -apple-system, Roboto, sans-serif; margin: 0; padding: 124px 12px 40px; line-height: 1.5; word-break: break-word; }
+  body { font-family: -apple-system, Roboto, sans-serif; margin: 0; padding: 132px 12px 40px; line-height: 1.5; word-break: break-word; }
   #panel { position: fixed; top: 0; left: 0; right: 0; background: #111; color: #fff; padding: 10px 12px; z-index: 99999; }
   #panel button { font-size: 15px; padding: 6px 10px; margin: 0 6px 6px 0; }
+  #hint { font-size: 12px; color: #bbb; }
   #summary { display: block; font-weight: bold; margin-top: 4px; }
   #report { background: #fff; color: #111; max-height: 45vh; overflow-y: auto; overflow-x: hidden; margin-top: 8px; font-size: 13px; -webkit-overflow-scrolling: touch; }
   #report div { padding: 4px 8px; border-bottom: 1px solid #eee; word-break: break-word; }
@@ -20,51 +21,55 @@
   pre { white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
 </style>
 <script>
-  // ---- Test harness (language-agnostic) ---------------------------------
-  // Snapshot every tagged element's text BEFORE you run the app's translate,
-  // then "Check" asserts behavioral invariants that hold for ANY target lang:
-  //   data-expect="translate"  -> the element's text must have CHANGED
-  //   data-expect="skip"       -> the element's text must be UNCHANGED
-  //   data-loose="1"           -> the element's DIRECT (loose) text must change too
-  //   data-keep="<sel>,<sel>"  -> each selector must still match a descendant
-  //   data-keep-attr="sel|attr|value" -> descendant's attr must still equal value
-  // Whitespace is normalized so cosmetic shifts don't fail a case.
+  // ---- en -> es golden test harness ------------------------------------
+  // Translate this page to SPANISH in the app, then tap "Check results".
+  // Per case (attributes on the tagged element):
+  //   data-expect="translate" + data-contains="w1|w2"  -> textContent must contain
+  //        each expected Spanish word (semantic check; English text fails it).
+  //   data-loose="w1|w2"   -> the element's DIRECT (loose) text must contain these
+  //        (catches loose text dropped in a mixed container).
+  //   data-expect="skip"   -> textContent must be UNCHANGED from the English source.
+  //   data-keep="sel,sel"  -> each selector must still match a descendant (tags kept).
+  //   data-keep-attr="sel|attr|value" -> descendant attr must still equal value.
+  //   data-expected="..."  -> the full expected Spanish (shown in the report only).
+  // Expected words are the real outputs of the enes.student.tiny11 model.
   var SNAP = {};
   function norm(s){ return (s||"").replace(/\s+/g," ").trim(); }
-  function directText(el){
-    var t=""; for (var n=el.firstChild;n;n=n.nextSibling){ if(n.nodeType===3) t+=n.nodeValue; } return t;
-  }
+  function lc(s){ return norm(s).toLowerCase(); }
+  function directText(el){ var t=""; for (var n=el.firstChild;n;n=n.nextSibling){ if(n.nodeType===3) t+=n.nodeValue; } return t; }
   function takeSnapshot(){
     SNAP = {};
     document.querySelectorAll("[data-test]").forEach(function(el){
-      SNAP[el.getAttribute("data-test")] = { full: norm(el.textContent), direct: norm(directText(el)) };
+      SNAP[el.getAttribute("data-test")] = { full: norm(el.textContent) };
     });
-    document.getElementById("summary").textContent = "snapshot taken (" + Object.keys(SNAP).length + " cases) — now run the app's Translate, then Check";
+    document.getElementById("summary").textContent = "snapshot taken (" + Object.keys(SNAP).length + " cases) — now Translate the page to Spanish, then Check";
   }
   function check(){
     if(!Object.keys(SNAP).length){ alert("No snapshot — reload the page first."); return; }
     var rows=[], pass=0, fail=0;
     document.querySelectorAll("[data-test]").forEach(function(el){
       var id=el.getAttribute("data-test"), label=el.getAttribute("data-label")||id;
-      var expect=el.getAttribute("data-expect"), s=SNAP[id]||{}, problems=[];
-      var nowFull=norm(el.textContent), nowDirect=norm(directText(el));
-      if(expect==="translate"){
-        if(nowFull===s.full) problems.push("text NOT translated (dropped or skipped) — still: \""+nowFull.slice(0,60)+"\"");
-      } else if(expect==="skip"){
-        if(nowFull!==s.full) problems.push("text was translated but should be LEFT ALONE — was \""+s.full.slice(0,40)+"\" now \""+nowFull.slice(0,40)+"\"");
+      var expect=el.getAttribute("data-expect"), problems=[];
+      var nowFull=norm(el.textContent), fullLc=lc(nowFull), dirLc=lc(directText(el));
+      if(expect==="skip"){
+        if(nowFull!==(SNAP[id]||{}).full) problems.push("should be LEFT ALONE but changed to: \""+nowFull.slice(0,50)+"\"");
+      } else if(expect==="translate"){
+        var c=el.getAttribute("data-contains");
+        if(c) c.split("|").forEach(function(w){ w=w.trim(); if(w && fullLc.indexOf(w.toLowerCase())<0) problems.push("missing Spanish word \""+w+"\""); });
+        var loose=el.getAttribute("data-loose");
+        if(loose) loose.split("|").forEach(function(w){ w=w.trim(); if(w && dirLc.indexOf(w.toLowerCase())<0) problems.push("LOOSE text not translated (dropped?) — missing \""+w+"\""); });
       }
-      if(el.getAttribute("data-loose")==="1" && nowDirect===s.direct && s.direct)
-        problems.push("LOOSE text in mixed container NOT translated — still: \""+nowDirect.slice(0,60)+"\"");
       var keep=el.getAttribute("data-keep");
-      if(keep) keep.split(",").forEach(function(sel){ sel=sel.trim(); if(sel && !el.querySelector(sel)) problems.push("lost element matching: "+sel); });
+      if(keep) keep.split(",").forEach(function(sel){ sel=sel.trim(); if(sel && !el.querySelector(sel)) problems.push("lost element: "+sel); });
       var ka=el.getAttribute("data-keep-attr");
       if(ka){ var p=ka.split("|"), node=el.querySelector(p[0]);
-        if(!node) problems.push("missing "+p[0]+" for attr check");
-        else if(node.getAttribute(p[1])!==p[2]) problems.push("attr "+p[1]+" changed: expected \""+p[2]+"\" got \""+node.getAttribute(p[1])+"\""); }
+        if(!node) problems.push("missing "+p[0]);
+        else if(node.getAttribute(p[1])!==p[2]) problems.push("attr "+p[1]+" changed to \""+node.getAttribute(p[1])+"\""); }
       var ok=problems.length===0; ok?pass++:fail++;
-      rows.push("<div class='"+(ok?"pass":"fail")+"'>"+(ok?"✓":"✗")+" "+label+(ok?"":" — "+problems.join("; "))+"</div>");
+      var detail = ok ? "" : " — " + problems.join("; ") + " | got: \"" + nowFull.slice(0,80) + "\"";
+      rows.push("<div class='"+(ok?"pass":"fail")+"'>"+(ok?"✓":"✗")+" "+label+detail+"</div>");
     });
-    document.getElementById("summary").textContent = "RESULT: "+pass+" passed, "+fail+" failed";
+    document.getElementById("summary").textContent = "RESULT: "+pass+" passed, "+fail+" failed (target: Spanish)";
     document.getElementById("report").innerHTML = rows.join("");
   }
   document.addEventListener("DOMContentLoaded", takeSnapshot);
@@ -75,127 +80,143 @@
     <button onclick="takeSnapshot()">Re-snapshot</button>
     <button onclick="check()">Check results</button>
     <button onclick="location.reload()">Reset</button>
+    <span id="hint">Translate this page to <b>Spanish</b>, then Check.</span>
     <span id="summary"></span>
     <div id="report"></div>
   </div>
 
-  <!-- 1. Plain block: must be translated -->
+  <!-- 1. Plain block -->
   <section><h3>1. simple paragraph</h3>
-    <p data-test="simple" data-expect="translate" data-label="Simple paragraph is translated">
+    <p data-test="simple" data-expect="translate" data-contains="perezoso|mañana"
+       data-expected="El ... perro perezoso cada mañana sin falta."
+       data-label="Simple paragraph is translated">
       The quick brown fox jumps over the lazy dog every single morning without fail.</p>
   </section>
 
-  <!-- 2. Inline tags + link inside a sentence: translated, tags + href preserved -->
-  <section><h3>2. inline tags &amp; link</h3>
-    <p data-test="inline" data-expect="translate" data-keep="strong, a[href]"
-       data-keep-attr="a|href|https://example.com/news"
-       data-label="Inline tags preserved; href unchanged; text translated">
+  <!-- 2. Inline tags + link inside a sentence (the key detag-and-project case) -->
+  <section><h3>2. inline tags &amp; link (tag repositioning)</h3>
+    <p data-test="inline" data-expect="translate" data-contains="historia|importante|actualizaciones"
+       data-keep="strong, a[href]" data-keep-attr="a|href|https://example.com/news"
+       data-expected="Esta es la historia <strong>más importante</strong> del día, con <a>actualizaciones en vivo</a> ..."
+       data-label="Sentence translated; strong + link kept and repositioned; href unchanged">
       This is the <strong>most important</strong> story of the day, with
       <a href="https://example.com/news">live updates</a> available right now.</p>
   </section>
 
   <!-- 3. THE GOTCHA: loose text directly inside a mixed container (has a block child) -->
   <section><h3>3. mixed container — loose text + block child</h3>
-    <div data-test="mixed" data-expect="translate" data-loose="1"
-         data-label="Loose intro text AND the inner paragraph are both translated">
+    <div data-test="mixed" data-expect="translate" data-loose="introductoria|traducirse"
+         data-contains="párrafo|correctamente"
+         data-expected="loose: Esta frase introductoria ... debe traducirse. / inner: Y este párrafo ... correctamente."
+         data-label="Loose intro text AND inner paragraph both translated">
       This introductory sentence sits directly inside the div and must be translated.
       <p>And this paragraph inside a block child must also be translated correctly.</p>
     </div>
   </section>
 
-  <!-- 4. Loose text in a list item that also contains a nested list -->
+  <!-- 4. Loose text in a list item that also has a nested list -->
   <section><h3>4. list item with nested list (loose text)</h3>
-    <ul><li data-test="li-loose" data-expect="translate" data-loose="1"
-            data-label="Outer list-item loose text is translated despite nested list">
+    <ul><li data-test="li-loose" data-expect="translate" data-loose="elija|opciones"
+            data-contains="anidada"
+            data-expected="loose: Elija una de las siguientes opciones... / nested: La primera opción anidada aquí"
+            data-label="Outer list-item loose text translated despite nested list">
       Choose one of the following coloured options below:
       <ul><li>The first nested option here</li></ul></li></ul>
   </section>
 
-  <!-- 5. translate="no": must be left untouched -->
+  <!-- 5. translate="no" -->
   <section><h3>5. translate="no"</h3>
     <p data-test="translate-no" data-expect="skip" translate="no"
-       data-label="translate=&quot;no&quot; content is left untouched">
+       data-label="translate=&quot;no&quot; content left untouched">
       KeepThisExactBrandName and this whole sentence must remain in English.</p>
   </section>
 
-  <!-- 6. script content: never translated -->
+  <!-- 6. script content -->
   <section><h3>6. &lt;script&gt; content</h3>
     <script type="application/ld+json" data-test="script" data-expect="skip"
-            data-label="Script content is not translated">
+            data-label="Script content not translated">
       { "headline": "This headline string lives inside a script and must not change." }
     </script>
-    <em>(script body is hidden; the Check reads its source text)</em>
+    <em>(script body hidden; the Check reads its source text)</em>
   </section>
 
-  <!-- 7. style content: never translated -->
+  <!-- 7. style content -->
   <section><h3>7. &lt;style&gt; content</h3>
-    <style data-test="style" data-expect="skip" data-label="Style/CSS content is not translated">
+    <style data-test="style" data-expect="skip" data-label="Style/CSS content not translated">
       /* This comment and the rule below must stay exactly as written */
       .test-color { color: red; font-weight: bold; }
     </style>
-    <em>(style body is hidden; the Check reads its source text)</em>
+    <em>(style body hidden; the Check reads its source text)</em>
   </section>
 
-  <!-- 8. code / pre: skip list -->
+  <!-- 8. code / pre -->
   <section><h3>8. code &amp; pre</h3>
-    <pre data-test="codepre" data-expect="skip" data-label="Code/pre content is not translated"><code>const greeting = "Hello world"; // this code must remain untranslated</code></pre>
+    <pre data-test="codepre" data-expect="skip" data-label="Code/pre content not translated"><code>const greeting = "Hello world"; // this code must remain untranslated</code></pre>
   </section>
 
-  <!-- 9. Visible text translated, but alt/title attributes are NOT (known limitation) -->
+  <!-- 9. Visible text translated, alt attribute NOT translated -->
   <section><h3>9. attributes are not translated</h3>
-    <p data-test="attrs" data-expect="translate"
+    <p data-test="attrs" data-expect="translate" data-contains="subtítulo|traducido"
        data-keep-attr="img|alt|A red bicycle leaning on a wall"
-       data-label="Caption text translated; img alt left in English (expected limitation)">
+       data-expected="Aquí hay un subtítulo descriptivo ... idioma objetivo. (alt stays English)"
+       data-label="Caption translated; img alt left in English (expected limitation)">
       <img src="data:," alt="A red bicycle leaning on a wall" width="1" height="1">
       Here is a descriptive caption that should be translated into the target language.</p>
   </section>
 
   <!-- 10. Nested inline formatting -->
   <section><h3>10. nested inline formatting</h3>
-    <p data-test="nested-inline" data-expect="translate" data-keep="b, b i"
-       data-label="Nested inline tags preserved; text translated">
+    <p data-test="nested-inline" data-expect="translate" data-contains="bienvenidos|maravilloso"
+       data-keep="b, b i"
+       data-expected="<b>Bienvenidos al <i>maravilloso</i> mundo</b> de la traducción ..."
+       data-label="Nested inline tags kept; text translated">
       <b>Welcome to the <i>wonderful</i> world</b> of on-device translation today.</p>
   </section>
 
-  <!-- 11. SVG icon inside text: svg preserved, text translated -->
+  <!-- 11. SVG icon inside text -->
   <section><h3>11. inline SVG icon</h3>
-    <p data-test="svg" data-expect="translate" data-keep="svg"
-       data-label="Inline SVG preserved; surrounding text translated">
+    <p data-test="svg" data-expect="translate" data-contains="navegación|secciones" data-keep="svg"
+       data-expected="Abrir la navegación <svg/> menú para ver todas las secciones disponibles."
+       data-label="Inline SVG kept; surrounding text translated">
       Open the navigation <svg viewBox="0 0 24 24" width="12" height="12"><path d="M3 12h18"/></svg>
       menu to see all of the available sections.</p>
   </section>
 
   <!-- 12. Heading -->
   <section><h3>12. heading</h3>
-    <h2 data-test="heading" data-expect="translate" data-label="Heading is translated">
+    <h2 data-test="heading" data-expect="translate" data-contains="novedades|región"
+        data-expected="Se reportan novedades en toda la región esta tarde"
+        data-label="Heading is translated">
       Breaking developments reported across the region this evening</h2>
   </section>
 
   <!-- 13. Table cell -->
   <section><h3>13. table cell</h3>
-    <table><tbody><tr><td data-test="cell" data-expect="translate"
-      data-label="Table cell text is translated">
+    <table><tbody><tr><td data-test="cell" data-expect="translate" data-contains="participantes|semana"
+      data-expected="El número total de participantes confirmados volvió a aumentar esta semana."
+      data-label="Table cell text translated">
       The total number of confirmed participants increased again this week.</td></tr></tbody></table>
   </section>
 
   <!-- 14. contentEditable: skip -->
   <section><h3>14. contentEditable</h3>
     <div data-test="editable" data-expect="skip" contenteditable="true"
-         data-label="contentEditable region is left untouched">
+         data-label="contentEditable region left untouched">
       This editable field content should never be translated by the page walker.</div>
   </section>
 
-  <!-- 15. Entities &amp; non-breaking space survive -->
+  <!-- 15. Entities &amp; non-breaking space -->
   <section><h3>15. entities &amp; nbsp</h3>
-    <p data-test="entities" data-expect="translate"
-       data-label="Text with entities is translated without markup corruption">
+    <p data-test="entities" data-expect="translate" data-contains="parque|soleada"
+       data-expected="Tom &amp; Jerry caminaron juntos por el parque en una tarde soleada."
+       data-label="Text with entities translated without markup corruption">
       Tom &amp; Jerry walked&nbsp;together through the park on a bright sunny afternoon.</p>
   </section>
 
-  <!-- 16. Already-translated marker: re-running must not double-process -->
+  <!-- 16. Already-translated marker is respected -->
   <section><h3>16. data-tk-done is respected</h3>
     <p data-test="done" data-expect="skip" data-tk-done
-       data-label="Element pre-marked data-tk-done is skipped on translate">
+       data-label="Element pre-marked data-tk-done is skipped">
       PreTranslatedSentinel — content already marked done must be skipped.</p>
   </section>
 </body>
