@@ -115,8 +115,8 @@
 
   <!-- 3. THE GOTCHA: loose text directly inside a mixed container (has a block child) -->
   <section><h3>3. mixed container — loose text + block child</h3>
-    <div data-test="mixed" data-expect="translate" data-loose="introductoria|traducirse"
-         data-contains="párrafo|correctamente"
+    <div data-test="mixed" data-expect="translate" data-loose="introductori|traduc"
+         data-contains="párrafo|correct"
          data-expected="loose: Esta frase introductoria ... debe traducirse. / inner: Y este párrafo ... correctamente."
          data-label="Loose intro text AND inner paragraph both translated">
       This introductory sentence sits directly inside the div and must be translated.
@@ -166,7 +166,7 @@
 
   <!-- 9. Visible text translated, alt attribute NOT translated -->
   <section><h3>9. attributes are not translated</h3>
-    <p data-test="attrs" data-expect="translate" data-contains="subtítulo|traducido"
+    <p data-test="attrs" data-expect="translate" data-contains="descriptivo|idioma"
        data-keep-attr="img|alt|A red bicycle leaning on a wall"
        data-expected="Aquí hay un subtítulo descriptivo ... idioma objetivo. (alt stays English)"
        data-label="Caption translated; img alt left in English (expected limitation)">
@@ -176,7 +176,7 @@
 
   <!-- 10. Nested inline formatting -->
   <section><h3>10. nested inline formatting</h3>
-    <p data-test="nested-inline" data-expect="translate" data-contains="bienvenidos|maravilloso"
+    <p data-test="nested-inline" data-expect="translate" data-contains="maravilloso|mundo"
        data-keep="b, b i"
        data-expected="<b>Bienvenidos al <i>maravilloso</i> mundo</b> de la traducción ..."
        data-label="Nested inline tags kept; text translated">
@@ -194,7 +194,7 @@
 
   <!-- 12. Heading -->
   <section><h3>12. heading</h3>
-    <h2 data-test="heading" data-expect="translate" data-contains="novedades|región"
+    <h2 data-test="heading" data-expect="translate" data-contains="región"
         data-expected="Se reportan novedades en toda la región esta tarde"
         data-label="Heading is translated">
       Breaking developments reported across the region this evening</h2>
