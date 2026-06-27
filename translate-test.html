@@ -14,6 +14,8 @@
   #summary { display: block; font-weight: bold; margin-top: 4px; }
   #report { background: #fff; color: #111; max-height: 45vh; overflow-y: auto; overflow-x: hidden; margin-top: 8px; font-size: 13px; -webkit-overflow-scrolling: touch; }
   #report div { padding: 4px 8px; border-bottom: 1px solid #eee; word-break: break-word; }
+  #reportHead { position: sticky; top: 0; background: #fff; padding: 6px 8px; border-bottom: 1px solid #ccc; font-size: 12px; color: #333; }
+  #reportHead button { font-size: 13px; padding: 4px 10px; float: right; }
   .pass { color: #0a7d2c; } .fail { color: #c0202a; font-weight: bold; }
   section { border: 1px solid #ddd; border-radius: 6px; padding: 10px 14px; margin: 12px 0; max-width: 100%; }
   section > h3 { margin: 0 0 6px; font-size: 13px; color: #666; text-transform: uppercase; letter-spacing: .5px; }
@@ -67,10 +69,18 @@
         else if(node.getAttribute(p[1])!==p[2]) problems.push("attr "+p[1]+" changed to \""+node.getAttribute(p[1])+"\""); }
       var ok=problems.length===0; ok?pass++:fail++;
       var detail = ok ? "" : " — " + problems.join("; ") + " | got: \"" + nowFull.slice(0,80) + "\"";
-      rows.push("<div class='"+(ok?"pass":"fail")+"'>"+(ok?"✓":"✗")+" "+label+detail+"</div>");
+      rows.push("<div class='"+(ok?"pass":"fail")+"' style='cursor:pointer' onclick=\"jumpTo('"+id+"')\">"+(ok?"✓":"✗")+" "+label+detail+"</div>");
     });
     document.getElementById("summary").textContent = "RESULT: "+pass+" passed, "+fail+" failed (target: Spanish)";
-    document.getElementById("report").innerHTML = rows.join("");
+    var rep=document.getElementById("report");
+    rep.innerHTML = "<div id='reportHead'>tap a row to jump to that case<button onclick=\"hideReport()\">✕ close</button></div>" + rows.join("");
+    rep.style.display="block";
+  }
+  function hideReport(){ document.getElementById("report").style.display="none"; }
+  function jumpTo(id){
+    hideReport();
+    var el=document.querySelector('[data-test="'+id+'"]');
+    if(el){ el.scrollIntoView({block:"center"}); el.style.outline="3px solid #ffb300"; setTimeout(function(){ el.style.outline=""; },2000); }
   }
   document.addEventListener("DOMContentLoaded", takeSnapshot);
 </script>
