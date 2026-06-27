@@ -5,16 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>translate-kit page-translation test harness</title>
 <style>
-  body { font-family: -apple-system, Roboto, sans-serif; margin: 0; padding: 90px 16px 40px; line-height: 1.5; }
-  #panel { position: fixed; top: 0; left: 0; right: 0; background: #111; color: #fff; padding: 10px 16px; z-index: 99999; }
-  #panel button { font-size: 15px; padding: 6px 12px; margin-right: 8px; }
-  #summary { font-weight: bold; margin-left: 8px; }
-  #report { background: #fff; color: #111; max-height: 40vh; overflow: auto; margin-top: 8px; font-size: 13px; }
-  #report div { padding: 4px 8px; border-bottom: 1px solid #eee; }
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; max-width: 100%; }
+  body { font-family: -apple-system, Roboto, sans-serif; margin: 0; padding: 124px 12px 40px; line-height: 1.5; word-break: break-word; }
+  #panel { position: fixed; top: 0; left: 0; right: 0; background: #111; color: #fff; padding: 10px 12px; z-index: 99999; }
+  #panel button { font-size: 15px; padding: 6px 10px; margin: 0 6px 6px 0; }
+  #summary { display: block; font-weight: bold; margin-top: 4px; }
+  #report { background: #fff; color: #111; max-height: 45vh; overflow-y: auto; overflow-x: hidden; margin-top: 8px; font-size: 13px; -webkit-overflow-scrolling: touch; }
+  #report div { padding: 4px 8px; border-bottom: 1px solid #eee; word-break: break-word; }
   .pass { color: #0a7d2c; } .fail { color: #c0202a; font-weight: bold; }
-  section { border: 1px solid #ddd; border-radius: 6px; padding: 10px 14px; margin: 12px 0; }
+  section { border: 1px solid #ddd; border-radius: 6px; padding: 10px 14px; margin: 12px 0; max-width: 100%; }
   section > h3 { margin: 0 0 6px; font-size: 13px; color: #666; text-transform: uppercase; letter-spacing: .5px; }
   code, pre { background: #f4f4f4; }
+  pre { white-space: pre-wrap; word-break: break-word; overflow-x: auto; }
 </style>
 <script>
   // ---- Test harness (language-agnostic) ---------------------------------
