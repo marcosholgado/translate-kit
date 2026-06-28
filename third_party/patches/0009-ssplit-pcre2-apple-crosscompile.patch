@@ -1,0 +1,53 @@
+diff --git a/inference/3rd_party/ssplit-cpp/cmake/FindPCRE2.cmake b/inference/3rd_party/ssplit-cpp/cmake/FindPCRE2.cmake
+index 8ea55cb..061b752 100644
+--- a/inference/3rd_party/ssplit-cpp/cmake/FindPCRE2.cmake
++++ b/inference/3rd_party/ssplit-cpp/cmake/FindPCRE2.cmake
+@@ -29,8 +29,9 @@ if(SSPLIT_USE_INTERNAL_PCRE2)
+   endif()
+ 
+   # Set configure options for internal pcre2 depeding on compiler
+-  if(CMAKE_CXX_COMPILER MATCHES "/em\\+\\+(-[a-zA-Z0-9.])?$")
+-    # jit compilation isn't supported by wasm
++  if(CMAKE_CXX_COMPILER MATCHES "/em\\+\\+(-[a-zA-Z0-9.])?$" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
++    # jit compilation isn't supported by wasm, and is forbidden on iOS (no
++    # executable mmap / W^X), where a JIT-enabled build links but traps at runtime.
+     set(PCRE2_JIT_OPTION  "-DPCRE2_SUPPORT_JIT=OFF")
+   else()
+     set(PCRE2_JIT_OPTION  "-DPCRE2_SUPPORT_JIT=ON")
+@@ -57,12 +58,34 @@ if(SSPLIT_USE_INTERNAL_PCRE2)
+   # If not supplied armv8-a switches into armv7-a, making the compiled library
+   # incompatible with an upstream bergamot-translator.
+   if(ANDROID)
+-    LIST(APPEND PCRE2_CONFIGURE_OPTIONS 
+-      -DANDROID_PLATFORM=${ANDROID_PLATFORM} 
++    LIST(APPEND PCRE2_CONFIGURE_OPTIONS
++      -DANDROID_PLATFORM=${ANDROID_PLATFORM}
+       -DANDROID_ABI=${ANDROID_ABI}
+     )
+   endif(ANDROID)
+ 
++  # Apple (macOS/iOS) drives the target arch / SDK / min-OS via CMAKE_OSX_* cache
++  # vars (and CMAKE_SYSTEM_NAME for iOS) rather than a toolchain file. An
++  # ExternalProject does not inherit the parent cache, so forward them explicitly;
++  # otherwise pcre2 builds for the build host -- the wrong arch/SDK when
++  # cross-compiling (iOS, or x86_64 on an arm64 host) and the wrong min-OS stamp
++  # even on a native macOS slice. translate-kit builds one arch per slice, so
++  # CMAKE_OSX_ARCHITECTURES is a single value (no list-expansion concerns here).
++  if(APPLE)
++    if(CMAKE_SYSTEM_NAME)
++      LIST(APPEND PCRE2_CONFIGURE_OPTIONS -DCMAKE_SYSTEM_NAME=${CMAKE_SYSTEM_NAME})
++    endif()
++    if(CMAKE_OSX_ARCHITECTURES)
++      LIST(APPEND PCRE2_CONFIGURE_OPTIONS -DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES})
++    endif()
++    if(CMAKE_OSX_SYSROOT)
++      LIST(APPEND PCRE2_CONFIGURE_OPTIONS -DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT})
++    endif()
++    if(CMAKE_OSX_DEPLOYMENT_TARGET)
++      LIST(APPEND PCRE2_CONFIGURE_OPTIONS -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET})
++    endif()
++  endif(APPLE)
++
+ 
+   # set include dirs and libraries for PCRE2
+   set(PCRE2_LIBRARIES ${CMAKE_BINARY_DIR}/${CMAKE_INSTALL_LIBDIR}/${CMAKE_STATIC_LIBRARY_PREFIX}pcre2-8${CMAKE_STATIC_LIBRARY_SUFFIX})

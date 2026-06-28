@@ -1,0 +1,23 @@
+diff --git a/inference/marian-fork/cmake/TargetArch.cmake b/inference/marian-fork/cmake/TargetArch.cmake
+index f653e3e2..b2bfbb20 100644
+--- a/inference/marian-fork/cmake/TargetArch.cmake
++++ b/inference/marian-fork/cmake/TargetArch.cmake
+@@ -81,12 +81,18 @@ function(target_architecture output_var)
+                 set(osx_arch_x86_64 TRUE)
+             elseif("${osx_arch}" STREQUAL "ppc64" AND ppc_support)
+                 set(osx_arch_ppc64 TRUE)
++            elseif("${osx_arch}" STREQUAL "arm64" OR "${osx_arch}" STREQUAL "arm64e")
++                set(osx_arch_arm64 TRUE)
+             else()
+                 message(FATAL_ERROR "Invalid OS X arch name: ${osx_arch}")
+             endif()
+         endforeach()
+ 
+         # Now add all the architectures in our normalized order
++        if(osx_arch_arm64)
++            list(APPEND ARCH arm64)
++        endif()
++
+         if(osx_arch_ppc)
+             list(APPEND ARCH ppc)
+         endif()
