@@ -12,6 +12,11 @@ dist/
 .gradle/
 local.properties
 
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
 # Bundled model artifacts fetched by scripts (not committed — see scripts/fetch-models.sh)
 models/*.ftz
 models/*.bin

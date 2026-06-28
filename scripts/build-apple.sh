@@ -178,8 +178,36 @@ build_slice() {
     echo "==> [$slice] OK"
 }
 
+# stage_headers <dir>
+# Stages the C ABI header + clang module map into <dir>, the layout the
+# XCFramework copies into each slice's Headers/ so Swift can `import CTranslateKit`.
+stage_headers() {
+    local dir="$1"
+    rm -rf "$dir"
+    mkdir -p "$dir/translate_kit"
+    cp "$REPO_ROOT/core/include/translate_kit/translate_kit.h" "$dir/translate_kit/"
+    cp "$REPO_ROOT/apple/cmodule/module.modulemap" "$dir/module.modulemap"
+}
+
 build_slice "macos-arm64" "arm64"
 
+# Assemble the XCFramework consumed by the SwiftPM package (apple/Package.swift).
+# E.2 ships a single macOS library (the arm64 slice); E.3 lipo-merges macos
+# arm64+x86_64 into one universal macOS library and adds ios / ios-simulator
+# `-library` entries here.
+HEADERS_STAGE="$REPO_ROOT/apple/build/headers"
+XCFRAMEWORK="$REPO_ROOT/apple/build/TranslateKit.xcframework"
+stage_headers "$HEADERS_STAGE"
+echo "==> assemble TranslateKit.xcframework"
+rm -rf "$XCFRAMEWORK"
+xcrun xcodebuild -create-xcframework \
+    -library "$REPO_ROOT/apple/build/lib/macos-arm64/libtranslatekit.a" -headers "$HEADERS_STAGE" \
+    -output "$XCFRAMEWORK"
+
 echo
-echo "macos-arm64 slice built and verified:"
-echo "  $REPO_ROOT/apple/build/lib/macos-arm64/libtranslatekit.a"
+echo "macos-arm64 slice built and verified; XCFramework assembled:"
+echo "  $XCFRAMEWORK"
+echo "  slices: $(ls "$XCFRAMEWORK" | grep -v Info.plist | tr '\n' ' ')"
+echo
+echo "Run the Swift goldens:"
+echo "  TK_TEST_MODEL_DIR=\"$MODEL_DIR\" swift test --package-path \"$REPO_ROOT/apple\""

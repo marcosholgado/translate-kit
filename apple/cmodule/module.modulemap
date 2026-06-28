@@ -1,0 +1,8 @@
+// Clang module map for the translate-kit C ABI, staged into the XCFramework's
+// per-slice Headers/ directory by scripts/build-apple.sh. It makes the C ABI
+// importable from Swift as `CTranslateKit`; the public Swift `TranslateKit`
+// target wraps it. The header path is relative to this module map (Headers/).
+module CTranslateKit {
+    header "translate_kit/translate_kit.h"
+    export *
+}
