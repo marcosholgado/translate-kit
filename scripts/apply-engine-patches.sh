@@ -69,14 +69,28 @@
 #     on a native macOS slice. Forward CMAKE_SYSTEM_NAME / CMAKE_OSX_ARCHITECTURES
 #     / CMAKE_OSX_SYSROOT / CMAKE_OSX_DEPLOYMENT_TARGET into the ExternalProject
 #     (mirrors the existing ANDROID block), and force PCRE2_SUPPORT_JIT=OFF on iOS
-#     (iOS forbids JIT). Needed for the Apple target (iOS + universal macOS).
+#     (iOS forbids JIT). On iOS also forward CMAKE_MACOSX_BUNDLE=OFF (CMake makes
+#     add_executable() a bundle on iOS, so pcre2's install(TARGETS pcre2grep/...)
+#     fails configure with "no BUNDLE DESTINATION") and CMAKE_TRY_COMPILE_TARGET_TYPE
+#     =STATIC_LIBRARY (keep the child's configure checks compile-only on the
+#     unrunnable cross target). Needed for the Apple target (iOS + universal macOS).
+#   0010-cpuinfo-arm-mach-ios
+#     ruy's bundled cpuinfo selects its ARM Mach init source (src/arm/mach/init.c,
+#     which defines cpuinfo_arm_mach_init + cpuinfo_isa) only when the bare IOS
+#     variable is set — which is the case under a community iOS *toolchain file*
+#     but NOT when iOS is configured via CMAKE_SYSTEM_NAME=iOS (as translate-kit
+#     does). The source is then skipped and ruy fails to link (CpuInfo::NeonDotprod
+#     references those symbols). Match CMAKE_SYSTEM_NAME=iOS too, as cpuinfo's own
+#     x86-mach and topology branches already do. Needed for the iOS arm slices
+#     (device + arm64 simulator). Pair with -DCMAKE_SYSTEM_PROCESSOR=<arch> at
+#     configure (build-apple.sh), which is what makes cpuinfo enter the arm branch.
 #
 # Patches 0002-0004 are needed to build the engine on modern compilers / macOS
-# (the Apple target); 0005-0006 are needed for the x86_64 ABI; 0008-0009 are
+# (the Apple target); 0005-0006 are needed for the x86_64 ABI; 0008-0010 are
 # needed for the Apple target (0008 for any pinned-arch Apple slice, 0009 for
-# cross-compiled / non-host-OS Apple slices). The Android arm64 NDK build needs
-# only 0001 to build (the other build patches are harmless there); 0007 is a
-# runtime correctness fix that matters on every target.
+# cross-compiled / non-host-OS Apple slices, 0010 for the iOS arm slices). The
+# Android arm64 NDK build needs only 0001 to build (the other build patches are
+# harmless there); 0007 is a runtime correctness fix that matters on every target.
 
 set -euo pipefail
 

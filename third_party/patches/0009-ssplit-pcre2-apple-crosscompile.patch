@@ -1,5 +1,5 @@
 diff --git a/inference/3rd_party/ssplit-cpp/cmake/FindPCRE2.cmake b/inference/3rd_party/ssplit-cpp/cmake/FindPCRE2.cmake
-index 8ea55cb..061b752 100644
+index 8ea55cb..b6d7ef7 100644
 --- a/inference/3rd_party/ssplit-cpp/cmake/FindPCRE2.cmake
 +++ b/inference/3rd_party/ssplit-cpp/cmake/FindPCRE2.cmake
 @@ -29,8 +29,9 @@ if(SSPLIT_USE_INTERNAL_PCRE2)
@@ -14,7 +14,7 @@ index 8ea55cb..061b752 100644
      set(PCRE2_JIT_OPTION  "-DPCRE2_SUPPORT_JIT=OFF")
    else()
      set(PCRE2_JIT_OPTION  "-DPCRE2_SUPPORT_JIT=ON")
-@@ -57,12 +58,34 @@ if(SSPLIT_USE_INTERNAL_PCRE2)
+@@ -57,12 +58,45 @@ if(SSPLIT_USE_INTERNAL_PCRE2)
    # If not supplied armv8-a switches into armv7-a, making the compiled library
    # incompatible with an upstream bergamot-translator.
    if(ANDROID)
@@ -45,6 +45,17 @@ index 8ea55cb..061b752 100644
 +    endif()
 +    if(CMAKE_OSX_DEPLOYMENT_TARGET)
 +      LIST(APPEND PCRE2_CONFIGURE_OPTIONS -DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET})
++    endif()
++    # iOS makes add_executable() a MACOSX_BUNDLE by default, so pcre2's
++    # install(TARGETS pcre2grep/pcre2test ...) fails configure ("no BUNDLE
++    # DESTINATION"). The parent sets CMAKE_MACOSX_BUNDLE=OFF, but the
++    # ExternalProject doesn't inherit it, so forward it (plus the static-library
++    # try-compile type, matching the parent, so any link-based check in pcre2's
++    # configure stays compile-only on the unrunnable iOS cross target).
++    if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
++      LIST(APPEND PCRE2_CONFIGURE_OPTIONS
++        -DCMAKE_MACOSX_BUNDLE=OFF
++        -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY)
 +    endif()
 +  endif(APPLE)
 +

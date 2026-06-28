@@ -25,7 +25,20 @@
 #   translatekit_add_engine(<engine_dir>)          configure + build engine targets
 #   translatekit_link_engine(<target> <engine_dir>) link the engine into <target>
 
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64|ARM64")
+# Resolve the TARGET architecture, not the build host. On Apple we cross-compile
+# (x86_64 slices on an arm64 host, and vice versa) and CMAKE_SYSTEM_PROCESSOR
+# stays the HOST arch — only CMAKE_OSX_ARCHITECTURES carries the real target. We
+# must agree with marian's own arm/x86 decision, which it makes from
+# CMAKE_OSX_ARCHITECTURES via its (patched) TargetArch.cmake; keying off the host
+# here would apply marian's ARM SIMD flags to an x86_64 slice (and skip the x86
+# GEMM config below). Outside Apple, CMAKE_OSX_ARCHITECTURES is empty and the host
+# processor is the target (Android pins its own arch; Linux/Windows build native).
+if(CMAKE_OSX_ARCHITECTURES)
+    set(_translatekit_target_arch "${CMAKE_OSX_ARCHITECTURES}")
+else()
+    set(_translatekit_target_arch "${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+if(_translatekit_target_arch MATCHES "aarch64|arm64|ARM64")
     set(TRANSLATEKIT_ARCH_ARM TRUE)
 else()
     set(TRANSLATEKIT_ARCH_ARM FALSE)
@@ -57,22 +70,34 @@ function(translatekit_add_engine engine_dir)
     set(COMPILE_TESTS OFF CACHE BOOL "" FORCE)
     set(COMPILE_UNIT_TESTS OFF CACHE BOOL "" FORCE)
 
-    # Pin the target CPU so marian never probes the build host (wrong when
-    # cross-compiling, e.g. for Android). On a native build the engine's own
-    # detection is correct, so we leave BUILD_ARCH alone.
-    if(ANDROID)
+    # Pin the target CPU so marian never probes the build host. marian defaults
+    # BUILD_ARCH=native, which makes it (a) run FindSSE try-compiles against the
+    # HOST and (b) pass -march=native. Both are wrong for a distributed,
+    # cross-compiled binary: native bakes in whatever CPU happened to build the
+    # slice (an x86_64 slice on an arm64 Mac can't even accept -march=native, and
+    # host SSE detection is meaningless), and host FindSSE injects bogus x86 -msse*
+    # flags even onto an ARM target. So we pin an explicit portable baseline for
+    # every cross/distributed target. Only a genuinely native build elsewhere
+    # (Linux/Windows host == target) is left on marian's own detection.
+    if(ANDROID OR APPLE)
         if(TRANSLATEKIT_ARCH_ARM)
-            # Real phones: marian's ruy/NEON int8 path.
+            # arm64: Android phones, macOS arm64, iOS device + arm64 simulator.
+            # Pin armv8-a (the 64-bit ARM baseline) — marian's ruy/NEON + simde
+            # path. simde's NEON mapping keys off the ARM/FMA/SSE *defines* applied
+            # per-target below, NOT the -msse* compiler flags, so dropping FindSSE
+            # is safe; this just avoids host-native over-targeting (e.g. baking the
+            # build Mac's M-series features into an older-iPhone binary).
             set(BUILD_ARCH "armv8-a" CACHE STRING "" FORCE)
         else()
-            # x86_64 emulator/CI: marian's intgemm path. Pin x86-64-v2 (SSE3/SSSE3/
-            # SSE4.2, no AVX) so marian compiles with a valid target -march (never
-            # the arm64 build host's "native") AND its own code never emits AVX
-            # instructions that SIGILL on an AVX2-less x86 emulator. We deliberately
-            # do NOT pin AVX2 here: intgemm runtime-dispatches its AVX2/SSSE3 int8
-            # kernels via CPUID independent of this -march, so the int8 hot path
-            # still uses AVX2 where the CPU has it — pinning v2 costs nothing there
-            # and buys emulator/CI robustness (the classic AVX-on-emulator SIGILL).
+            # x86_64: Android emulator/CI, macOS x86_64, iOS x86_64 simulator —
+            # marian's intgemm path, all cross-compiled on an arm64 host here. Pin
+            # x86-64-v2 (SSE3/SSSE3/SSE4.2, no AVX) so marian compiles with a valid
+            # target -march (never the host's "native") AND never emits AVX that
+            # SIGILLs on an AVX2-less x86 emulator. We deliberately do NOT pin AVX2:
+            # intgemm runtime-dispatches its AVX2/SSSE3 int8 kernels via CPUID
+            # independent of this -march, so the int8 hot path still uses AVX2 where
+            # the CPU has it — pinning v2 costs nothing there and buys a portable
+            # floor for a distributed slice + emulator/CI robustness.
             set(BUILD_ARCH "x86-64-v2" CACHE STRING "" FORCE)
         endif()
     endif()
@@ -81,10 +106,15 @@ function(translatekit_add_engine engine_dir)
     # ARM it routes sgemm through ruy (marian sets USE_RUY_SGEMM itself). On x86
     # it expects MKL/OpenBLAS, and with neither present marian's fallback sgemm is
     # a stub that aborts at the first translate (BeamSearch -> ProdBatched ->
-    # sgemm -> abort). We ship no BLAS, so route x86's float sgemm through ruy too
-    # (portable; ruy has x86 AVX2/SSE kernels). int8 stays on intgemm. Requires
-    # engine patch 0006 (marian builds ruy under USE_RUY_SGEMM, not only USE_RUY).
-    if(NOT TRANSLATEKIT_ARCH_ARM)
+    # sgemm -> abort). Apple ships a BLAS: marian auto-selects Accelerate on APPLE
+    # (its BLAS block takes the `APPLE AND USE_APPLE_ACCELERATE` branch BEFORE the
+    # ruy-sgemm one), so the float path is already covered on every Apple slice —
+    # the same Accelerate backend the arm64 slice uses — and ruy's sgemm is neither
+    # needed nor reachable there (forcing it would only build dead ruy code). Only
+    # Android's x86_64 has no BLAS, so route ITS float sgemm through ruy (portable;
+    # ruy has x86 AVX2/SSE kernels). int8 stays on intgemm. Requires engine patch
+    # 0006 (marian builds ruy under USE_RUY_SGEMM, not only USE_RUY).
+    if(NOT TRANSLATEKIT_ARCH_ARM AND NOT APPLE)
         set(USE_RUY_SGEMM ON CACHE BOOL "" FORCE)
     endif()
 

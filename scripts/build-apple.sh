@@ -26,9 +26,10 @@
 # smoke (apple/smoke) against it alone, proving it is symbol-complete.
 #
 # Subphase status:
-#   E.1 (this commit): macos-arm64 slice + merged archive + C-ABI smoke. <- DONE
-#   E.3 (later):       macos-x86_64, ios-arm64, iossim-{arm64,x86_64}; lipo +
-#                      `xcodebuild -create-xcframework`.
+#   E.1: macos-arm64 slice + merged archive + C-ABI smoke. <- DONE
+#   E.3: macos-x86_64 -> universal macOS (Intel); ios-arm64 (device) +
+#        iossim-{arm64,x86_64} -> universal ios-simulator; 3-platform
+#        XCFramework (macos / ios / ios-simulator). <- DONE
 #
 # Prerequisites (one-time, see README):
 #   git submodule update --init --recursive third_party/cld2
@@ -39,7 +40,7 @@
 #   scripts/apply-engine-patches.sh
 #
 # Usage:
-#   scripts/build-apple.sh                 # build + verify the macos-arm64 slice
+#   scripts/build-apple.sh                 # build + verify the universal macOS slice
 #
 # Toolchain overrides (env): CMAKE_BIN, NINJA_BIN (default: the Android SDK copy,
 # which is the cmake/ninja already proven on this host).
@@ -51,6 +52,7 @@ CMAKE_BIN="${CMAKE_BIN:-$HOME/Library/Android/sdk/cmake/3.22.1/bin/cmake}"
 NINJA_BIN="${NINJA_BIN:-$HOME/Library/Android/sdk/cmake/3.22.1/bin/ninja}"
 
 MACOS_DEPLOYMENT_TARGET="12.0"
+IOS_DEPLOYMENT_TARGET="15.0"
 MODEL_DIR="$REPO_ROOT/models/test-models/ende.student.tiny11"
 
 for tool in "$CMAKE_BIN" "$NINJA_BIN"; do
@@ -82,16 +84,68 @@ build_slice() {
     local merged="$lib_dir/libtranslatekit.a"
     mkdir -p "$lib_dir"
 
-    # Per-platform deployment-target flags. The engine objects must be compiled
-    # for the deployment floor (not the build host's SDK), else they are stamped
-    # with the host OS version and the consumer link warns/breaks. iOS slices add
-    # CMAKE_SYSTEM_NAME / CMAKE_OSX_SYSROOT here in E.3.
+    # Per-platform configure flags. The engine objects must be compiled for the
+    # deployment floor and the right SDK/platform (not the build host's), else they
+    # are stamped wrong and the consumer link warns/breaks. CMAKE_SYSTEM_NAME=iOS
+    # puts CMake in cross-compile mode; the engine's TargetArch + PCRE2
+    # ExternalProject pick the platform up via patches 0008/0009 (PCRE2 JIT is
+    # forced off on iOS there). sdk_name + minos_flag are reused below to re-link
+    # the standalone smoke against the right SDK.
+    #
+    # CMAKE_SYSTEM_PROCESSOR (iOS only): setting CMAKE_SYSTEM_NAME alone leaves
+    # CMAKE_SYSTEM_PROCESSOR empty, and deps that gate source selection on it (ruy's
+    # bundled cpuinfo) then drop their arm/x86 backend — e.g. cpuinfo skips
+    # src/arm/mach/init.c and ruy fails to link (cpuinfo_arm_mach_init/cpuinfo_isa
+    # undefined). Pin it to the slice's target arch (the standard cross-compile
+    # practice). macOS slices are native (no CMAKE_SYSTEM_NAME) so it stays the host.
+    #
+    # CMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY (iOS only): CMake's configure
+    # checks (check_include_file, find_package(Threads), ...) default to building
+    # an *executable*, whose link step fails when cross-compiling to iOS (`ld:
+    # library 'System' not found`) — so e.g. pthread.h is wrongly reported missing
+    # and sentencepiece's find_package(Threads) aborts configure. Building those
+    # probes as static libs makes them compile-only (no link), the standard fix
+    # for an unrunnable cross target. macOS slices link host executables fine and
+    # don't need it.
+    #
+    # CMAKE_MACOSX_BUNDLE=OFF (iOS only): CMake defaults add_executable() to a
+    # MACOSX_BUNDLE on iOS, so sentencepiece's `install(TARGETS spm_* RUNTIME ...)`
+    # fails configure ("no BUNDLE DESTINATION"). We can't just drop those CLI tools
+    # (marian set_property's them), so instead make iOS executables plain (non-
+    # bundle): install() then validates. We only build the tk_smoke target, so the
+    # CLI tools are configured but never compiled — zero cost, none in the archive.
     local cmake_platform_flags=()
     local minos_flag=""
+    local sdk_name=""
     case "$slice" in
         macos-*)
+            sdk_name="macosx"
             cmake_platform_flags+=(-DCMAKE_OSX_DEPLOYMENT_TARGET="$MACOS_DEPLOYMENT_TARGET")
             minos_flag="-mmacosx-version-min=$MACOS_DEPLOYMENT_TARGET"
+            ;;
+        ios-*)
+            # iOS device (arm64). ruy + Accelerate ARM path.
+            sdk_name="iphoneos"
+            cmake_platform_flags+=(
+                -DCMAKE_SYSTEM_NAME=iOS
+                -DCMAKE_SYSTEM_PROCESSOR="$arch"
+                -DCMAKE_OSX_SYSROOT=iphoneos
+                -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET"
+                -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
+                -DCMAKE_MACOSX_BUNDLE=OFF)
+            minos_flag="-mios-version-min=$IOS_DEPLOYMENT_TARGET"
+            ;;
+        iossim-*)
+            # iOS simulator (arm64 + x86_64), runs on the host Mac's Simulator.
+            sdk_name="iphonesimulator"
+            cmake_platform_flags+=(
+                -DCMAKE_SYSTEM_NAME=iOS
+                -DCMAKE_SYSTEM_PROCESSOR="$arch"
+                -DCMAKE_OSX_SYSROOT=iphonesimulator
+                -DCMAKE_OSX_DEPLOYMENT_TARGET="$IOS_DEPLOYMENT_TARGET"
+                -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
+                -DCMAKE_MACOSX_BUNDLE=OFF)
+            minos_flag="-mios-simulator-version-min=$IOS_DEPLOYMENT_TARGET"
             ;;
         *)
             echo "error: unknown slice '$slice'" >&2
@@ -151,29 +205,42 @@ build_slice() {
     du -h "$merged" | awk '{print "      size: " $1}'
 
     # Verify the MERGED archive is symbol-complete: re-link the smoke against it
-    # alone (no CMake target graph), the way an XCFramework consumer links.
+    # alone (no CMake target graph), the way an XCFramework consumer links. The
+    # SDK must be pinned per slice — without -isysroot, clang defaults to the macOS
+    # SDK and an iOS slice would link against the wrong frameworks.
     echo "==> [$slice] re-link smoke against the merged archive only"
-    local sdk_flags=(-arch "$arch" "$minos_flag")
+    local sdk_path; sdk_path="$(xcrun --sdk "$sdk_name" --show-sdk-path)"
+    local sdk_flags=(-arch "$arch" -isysroot "$sdk_path" "$minos_flag")
     xcrun clang "${sdk_flags[@]}" -I "$REPO_ROOT/core/include" \
         -c "$REPO_ROOT/apple/smoke/smoke.c" -o "$build_dir/smoke_standalone.o"
     xcrun clang++ "${sdk_flags[@]}" \
         "$build_dir/smoke_standalone.o" "$merged" "${syslibs[@]}" \
         -o "$build_dir/tk_smoke_standalone"
 
-    # Run both: CMake-linked first (target-graph proof), then the merged-archive
-    # build (packaging proof). With a test model present they also assert a live
-    # en->de translation; otherwise they still exercise the full link.
-    local model_env=()
-    if [ -d "$MODEL_DIR" ]; then
-        model_env=(env "TK_TEST_MODEL_DIR=$MODEL_DIR")
-    else
-        echo "    note: $MODEL_DIR absent (run scripts/fetch-models.sh); smoke runs without live translation"
-    fi
+    # Run the smoke only on a NATIVE macOS slice matching the build host's arch.
+    # Cross-compiled slices (an x86_64 slice on this arm64 host, and every iOS
+    # slice) are link-only: building tk_smoke and re-linking tk_smoke_standalone
+    # above already proved the merged archive is symbol-complete, which is what the
+    # smoke verifies. Functional iOS coverage is a later `xcodebuild test` on a
+    # simulator; functional x86_64 coverage is a CI job on an Intel runner.
+    if [ "$slice" = "macos-$(uname -m)" ]; then
+        # CMake-linked first (target-graph proof), then the merged-archive build
+        # (packaging proof). With a test model present they also assert a live
+        # en->de translation; otherwise they still exercise the full link.
+        local model_env=()
+        if [ -d "$MODEL_DIR" ]; then
+            model_env=(env "TK_TEST_MODEL_DIR=$MODEL_DIR")
+        else
+            echo "    note: $MODEL_DIR absent (run scripts/fetch-models.sh); smoke runs without live translation"
+        fi
 
-    echo "==> [$slice] run tk_smoke (CMake-linked)"
-    "${model_env[@]}" "$build_dir/tk_smoke"
-    echo "==> [$slice] run tk_smoke_standalone (merged-archive-linked)"
-    "${model_env[@]}" "$build_dir/tk_smoke_standalone"
+        echo "==> [$slice] run tk_smoke (CMake-linked)"
+        "${model_env[@]}" "$build_dir/tk_smoke"
+        echo "==> [$slice] run tk_smoke_standalone (merged-archive-linked)"
+        "${model_env[@]}" "$build_dir/tk_smoke_standalone"
+    else
+        echo "==> [$slice] link-only (cross-compiled, not host-runnable); tk_smoke + standalone linked OK"
+    fi
 
     echo "==> [$slice] OK"
 }
@@ -189,25 +256,61 @@ stage_headers() {
     cp "$REPO_ROOT/apple/cmodule/module.modulemap" "$dir/module.modulemap"
 }
 
-build_slice "macos-arm64" "arm64"
+build_slice "macos-arm64"   "arm64"
+build_slice "macos-x86_64"  "x86_64"
+build_slice "ios-arm64"     "arm64"
+build_slice "iossim-arm64"  "arm64"
+build_slice "iossim-x86_64" "x86_64"
 
-# Assemble the XCFramework consumed by the SwiftPM package (apple/Package.swift).
-# E.2 ships a single macOS library (the arm64 slice); E.3 lipo-merges macos
-# arm64+x86_64 into one universal macOS library and adds ios / ios-simulator
-# `-library` entries here.
+# An XCFramework holds at most ONE library per platform, so same-platform arches
+# must be fused into a single fat (universal) archive — separate -library entries
+# for one platform are rejected. macOS arm64+x86_64 → one `macos` library;
+# iossim arm64+x86_64 → one `ios-simulator` library. The iOS device slice is its
+# own platform (a single arm64 archive, no lipo). That yields the 3 distinct
+# platforms an XCFramework needs: macos / ios / ios-simulator.
+lipo_universal() {
+    local out="$1"; shift
+    mkdir -p "$(dirname "$out")"
+    rm -f "$out"
+    echo "==> lipo $(basename "$(dirname "$out")") <- $*"
+    lipo -create "$@" -output "$out"
+    lipo -info "$out" | sed 's/^/    /'
+}
+
+MACOS_UNIVERSAL="$REPO_ROOT/apple/build/lib/macos/libtranslatekit.a"
+lipo_universal "$MACOS_UNIVERSAL" \
+    "$REPO_ROOT/apple/build/lib/macos-arm64/libtranslatekit.a" \
+    "$REPO_ROOT/apple/build/lib/macos-x86_64/libtranslatekit.a"
+
+IOSSIM_UNIVERSAL="$REPO_ROOT/apple/build/lib/iossimulator/libtranslatekit.a"
+lipo_universal "$IOSSIM_UNIVERSAL" \
+    "$REPO_ROOT/apple/build/lib/iossim-arm64/libtranslatekit.a" \
+    "$REPO_ROOT/apple/build/lib/iossim-x86_64/libtranslatekit.a"
+
+IOS_DEVICE="$REPO_ROOT/apple/build/lib/ios-arm64/libtranslatekit.a"
+
+# Assemble the XCFramework consumed by the SwiftPM package (apple/Package.swift):
+# one -library per platform (macos / ios / ios-simulator), each with the same
+# staged C-ABI headers. Xcode selects the right slice per build destination.
 HEADERS_STAGE="$REPO_ROOT/apple/build/headers"
 XCFRAMEWORK="$REPO_ROOT/apple/build/TranslateKit.xcframework"
 stage_headers "$HEADERS_STAGE"
 echo "==> assemble TranslateKit.xcframework"
 rm -rf "$XCFRAMEWORK"
 xcrun xcodebuild -create-xcframework \
-    -library "$REPO_ROOT/apple/build/lib/macos-arm64/libtranslatekit.a" -headers "$HEADERS_STAGE" \
+    -library "$MACOS_UNIVERSAL"  -headers "$HEADERS_STAGE" \
+    -library "$IOS_DEVICE"       -headers "$HEADERS_STAGE" \
+    -library "$IOSSIM_UNIVERSAL" -headers "$HEADERS_STAGE" \
     -output "$XCFRAMEWORK"
 
 echo
-echo "macos-arm64 slice built and verified; XCFramework assembled:"
+echo "all Apple slices built and verified; XCFramework assembled:"
 echo "  $XCFRAMEWORK"
-echo "  slices: $(ls "$XCFRAMEWORK" | grep -v Info.plist | tr '\n' ' ')"
+echo "  platforms: $(ls "$XCFRAMEWORK" | grep -v Info.plist | tr '\n' ' ')"
 echo
-echo "Run the Swift goldens:"
+echo "Run the Swift goldens (macOS host):"
 echo "  TK_TEST_MODEL_DIR=\"$MODEL_DIR\" swift test --package-path \"$REPO_ROOT/apple\""
+echo "Run the iOS-simulator goldens:"
+echo "  xcodebuild test -scheme TranslateKit-Package \\"
+echo "    -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \\"
+echo "    TK_TEST_MODEL_DIR=\"$MODEL_DIR\"  # (set via scheme env / xcconfig)"
