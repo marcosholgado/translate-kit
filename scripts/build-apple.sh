@@ -274,6 +274,11 @@ build_slice() {
         # CMake-linked first (target-graph proof), then the merged-archive build
         # (packaging proof). With a test model present they also assert a live
         # en->de translation; otherwise they still exercise the full link.
+        # Optional `env TK_TEST_MODEL_DIR=...` prefix when a test model is present
+        # (then the smoke also asserts a live translation). The `[@]+...` guard
+        # makes the EMPTY-array case safe under `set -u` on bash 3.2 (macOS's
+        # default /bin/bash), where a bare "${model_env[@]}" aborts with
+        # "unbound variable" — which is exactly the model-less release build.
         local model_env=()
         if [ -d "$MODEL_DIR" ]; then
             model_env=(env "TK_TEST_MODEL_DIR=$MODEL_DIR")
@@ -282,9 +287,9 @@ build_slice() {
         fi
 
         echo "==> [$slice] run tk_smoke (CMake-linked)"
-        "${model_env[@]}" "$build_dir/tk_smoke"
+        "${model_env[@]+"${model_env[@]}"}" "$build_dir/tk_smoke"
         echo "==> [$slice] run tk_smoke_standalone (merged-archive-linked)"
-        "${model_env[@]}" "$build_dir/tk_smoke_standalone"
+        "${model_env[@]+"${model_env[@]}"}" "$build_dir/tk_smoke_standalone"
     else
         echo "==> [$slice] link-only (cross-compiled, not host-runnable); tk_smoke + standalone linked OK"
     fi
