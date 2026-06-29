@@ -12,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# x86_64 validation CI. The x86_64 engine path can only be *run* on an x86_64
-# host (the emulator refuses x86_64 guests on an aarch64 host, e.g. Apple
-# Silicon), so we exercise it here on x86_64 Linux runners:
-#   - core-native:      builds + runs the host gtest goldens natively (fast).
-#   - android-emulator: runs the instrumented tests on a KVM-accelerated x86_64
-#                       Android emulator (the real .so + JNI path).
-# arm64 is validated locally on an arm64 device/emulator (see C.5).
+# Continuous integration across each platform's real toolchain:
+#   - core-native:      x86_64 Linux — builds + runs the host gtest goldens natively (fast).
+#   - android-emulator: x86_64 Linux — instrumented tests on a KVM-accelerated x86_64 Android
+#                       emulator (the real .so + JNI path). The x86_64 engine path can only be
+#                       *run* on an x86_64 host (the emulator refuses x86_64 guests on an
+#                       aarch64 host, e.g. Apple Silicon), hence the Linux runners here.
+#   - apple:            macOS (Apple Silicon) — builds the macOS + iOS-simulator slices and runs
+#                       the Swift goldens on both (`swift test` + an iOS-sim `xcodebuild test`).
+# Android arm64 is validated locally on an arm64 device/emulator (see C.5).
 
 name: CI
 
@@ -130,3 +132,62 @@ jobs:
           # Build only the x86_64 engine (the emulator's ABI); the published AAR
           # still ships both ABIs.
           script: cd android && ./gradlew :translate-kit:connectedAndroidTest -PtestAbi=x86_64
+
+  apple:
+    name: apple (macOS + iOS sim)
+    runs-on: macos-latest      # GitHub's macOS runners are Apple Silicon (arm64)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init engine submodules
+        run: |
+          git submodule update --init --recursive third_party/cld2
+          git submodule update --init third_party/translations
+          git -C third_party/translations submodule update --init --recursive \
+            inference/3rd_party/ssplit-cpp \
+            inference/marian-fork/src/3rd_party/sentencepiece \
+            inference/marian-fork/src/3rd_party/intgemm \
+            inference/marian-fork/src/3rd_party/ruy \
+            inference/marian-fork/src/3rd_party/simd_utils
+
+      - name: Apply engine patches
+        run: bash scripts/apply-engine-patches.sh
+
+      - name: Fetch test model
+        run: bash scripts/fetch-models.sh
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      # Build only the slices CI can functionally exercise on an Apple-Silicon
+      # runner: macos-arm64 (for `swift test`) and iossim-arm64 (for the iOS-sim
+      # `xcodebuild test`). The full, shippable XCFramework (universal macOS +
+      # Intel, iOS device, universal simulator) is built by the release workflow;
+      # the slices omitted here are cross-compiled and link-only, so they can't be
+      # run on this runner. build-apple.sh defaults CMAKE_BIN/NINJA_BIN to the
+      # Android SDK (absent here), so point them at the Homebrew toolchain.
+      - name: Build Apple slices (macOS + iOS simulator, arm64)
+        run: |
+          export CMAKE_BIN="$(command -v cmake)"
+          export NINJA_BIN="$(command -v ninja)"
+          scripts/build-apple.sh macos-arm64 iossim-arm64
+
+      - name: Swift goldens (macOS host)
+        run: |
+          TK_TEST_MODEL_DIR="$PWD/models/test-models/ende.student.tiny11" \
+            swift test --package-path apple
+
+      - name: Swift goldens (iOS simulator)
+        run: |
+          set -euo pipefail
+          # Pick the first available iPhone simulator on the runner image.
+          SIM_ID="$(xcrun simctl list devices available --json \
+            | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][0].udid')"
+          echo "Using iOS simulator $SIM_ID"
+          xcrun simctl bootstatus "$SIM_ID" -b
+          # SIMCTL_CHILD_* doesn't reach the test under xcodebuild, so inject the
+          # model dir into the booted sim's environment via launchctl.
+          xcrun simctl spawn "$SIM_ID" launchctl setenv TK_TEST_MODEL_DIR \
+            "$PWD/models/test-models/ende.student.tiny11"
+          ( cd apple && xcrun xcodebuild test -scheme TranslateKit \
+              -destination "platform=iOS Simulator,id=$SIM_ID" )

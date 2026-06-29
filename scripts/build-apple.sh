@@ -30,6 +30,8 @@
 #   E.3: macos-x86_64 -> universal macOS (Intel); ios-arm64 (device) +
 #        iossim-{arm64,x86_64} -> universal ios-simulator; 3-platform
 #        XCFramework (macos / ios / ios-simulator). <- DONE
+#   E.4: optional slice allow-list (build a subset; the XCFramework is assembled
+#        from whatever was built) so CI can build only what it tests. <- DONE
 #
 # Prerequisites (one-time, see README):
 #   git submodule update --init --recursive third_party/cld2
@@ -40,10 +42,17 @@
 #   scripts/apply-engine-patches.sh
 #
 # Usage:
-#   scripts/build-apple.sh                 # build + verify the universal macOS slice
+#   scripts/build-apple.sh                            # build ALL 5 slices + XCFramework
+#   scripts/build-apple.sh macos-arm64 iossim-arm64   # build only these slices; the
+#                                                     # XCFramework is assembled from
+#                                                     # whatever was built (CI subset)
+#   scripts/build-apple.sh --help
+#
+# Slices: macos-arm64 macos-x86_64 ios-arm64 iossim-arm64 iossim-x86_64
 #
 # Toolchain overrides (env): CMAKE_BIN, NINJA_BIN (default: the Android SDK copy,
-# which is the cmake/ninja already proven on this host).
+# which is the cmake/ninja already proven on this host; on a CI runner without
+# the Android SDK, point these at Homebrew's cmake/ninja).
 
 set -euo pipefail
 
@@ -54,6 +63,44 @@ NINJA_BIN="${NINJA_BIN:-$HOME/Library/Android/sdk/cmake/3.22.1/bin/ninja}"
 MACOS_DEPLOYMENT_TARGET="12.0"
 IOS_DEPLOYMENT_TARGET="15.0"
 MODEL_DIR="$REPO_ROOT/models/test-models/ende.student.tiny11"
+
+ALL_SLICES=(macos-arm64 macos-x86_64 ios-arm64 iossim-arm64 iossim-x86_64)
+
+usage() {
+    cat <<'EOF'
+Usage: scripts/build-apple.sh [SLICE ...]
+
+Builds translate-kit for Apple platforms and assembles TranslateKit.xcframework.
+With no args, builds all 5 slices. With an explicit allow-list, builds only those
+slices and assembles the XCFramework from whatever was built (used by CI to build
+only what it tests).
+
+Slices:
+  macos-arm64  macos-x86_64  ios-arm64  iossim-arm64  iossim-x86_64
+
+Env overrides:
+  CMAKE_BIN, NINJA_BIN   cmake/ninja to use (default: the Android SDK copy; on a
+                         CI runner without it, point at Homebrew's cmake/ninja).
+EOF
+}
+
+# Optional positional args = an allow-list of slices to build (default: all).
+# A subset still produces a valid XCFramework, assembled from whatever was built.
+REQUESTED_SLICES=()
+for arg in "$@"; do
+    case "$arg" in
+        -h|--help) usage; exit 0 ;;
+        macos-arm64|macos-x86_64|ios-arm64|iossim-arm64|iossim-x86_64)
+            REQUESTED_SLICES+=("$arg") ;;
+        *)
+            echo "error: unknown slice '$arg' (valid: ${ALL_SLICES[*]})" >&2
+            exit 1
+            ;;
+    esac
+done
+if [ "${#REQUESTED_SLICES[@]}" -eq 0 ]; then
+    REQUESTED_SLICES=("${ALL_SLICES[@]}")
+fi
 
 for tool in "$CMAKE_BIN" "$NINJA_BIN"; do
     if [ ! -x "$tool" ]; then
@@ -256,17 +303,18 @@ stage_headers() {
     cp "$REPO_ROOT/apple/cmodule/module.modulemap" "$dir/module.modulemap"
 }
 
-build_slice "macos-arm64"   "arm64"
-build_slice "macos-x86_64"  "x86_64"
-build_slice "ios-arm64"     "arm64"
-build_slice "iossim-arm64"  "arm64"
-build_slice "iossim-x86_64" "x86_64"
+# Build each requested slice. The arch is the trailing token of the slice name
+# (macos-arm64 -> arm64, iossim-x86_64 -> x86_64); build_slice keys the platform
+# off the leading token.
+for slice in "${REQUESTED_SLICES[@]}"; do
+    build_slice "$slice" "${slice##*-}"
+done
 
 # An XCFramework holds at most ONE library per platform, so same-platform arches
 # must be fused into a single fat (universal) archive — separate -library entries
 # for one platform are rejected. macOS arm64+x86_64 → one `macos` library;
-# iossim arm64+x86_64 → one `ios-simulator` library. The iOS device slice is its
-# own platform (a single arm64 archive, no lipo). That yields the 3 distinct
+# iossim arm64+x86_64 → one `ios-simulator` library; the iOS device slice is its
+# own platform (a single arm64 archive). That yields the (up to) 3 distinct
 # platforms an XCFramework needs: macos / ios / ios-simulator.
 lipo_universal() {
     local out="$1"; shift
@@ -277,40 +325,53 @@ lipo_universal() {
     lipo -info "$out" | sed 's/^/    /'
 }
 
-MACOS_UNIVERSAL="$REPO_ROOT/apple/build/lib/macos/libtranslatekit.a"
-lipo_universal "$MACOS_UNIVERSAL" \
-    "$REPO_ROOT/apple/build/lib/macos-arm64/libtranslatekit.a" \
-    "$REPO_ROOT/apple/build/lib/macos-x86_64/libtranslatekit.a"
-
-IOSSIM_UNIVERSAL="$REPO_ROOT/apple/build/lib/iossimulator/libtranslatekit.a"
-lipo_universal "$IOSSIM_UNIVERSAL" \
-    "$REPO_ROOT/apple/build/lib/iossim-arm64/libtranslatekit.a" \
-    "$REPO_ROOT/apple/build/lib/iossim-x86_64/libtranslatekit.a"
-
-IOS_DEVICE="$REPO_ROOT/apple/build/lib/ios-arm64/libtranslatekit.a"
-
-# Assemble the XCFramework consumed by the SwiftPM package (apple/Package.swift):
-# one -library per platform (macos / ios / ios-simulator), each with the same
-# staged C-ABI headers. Xcode selects the right slice per build destination.
+LIB_ROOT="$REPO_ROOT/apple/build/lib"
 HEADERS_STAGE="$REPO_ROOT/apple/build/headers"
 XCFRAMEWORK="$REPO_ROOT/apple/build/TranslateKit.xcframework"
 stage_headers "$HEADERS_STAGE"
+
+# add_platform <fused-out.a> <slice> [<slice> ...]
+# Fuses whichever of the named slices were built THIS run into one library (lipo
+# copies a lone arch, fuses several) and queues it as an XCFramework -library
+# with the staged C-ABI headers. Skips the platform when none of its slices were
+# requested — so a CI subset assembles a smaller-but-valid XCFramework. Gated on
+# REQUESTED_SLICES (not just archive existence) so a stale archive left by a
+# previous full build is never silently folded into a subset build.
+XCF_ARGS=()
+add_platform() {
+    local out="$1"; shift
+    local inputs=() s
+    for s in "$@"; do
+        case " ${REQUESTED_SLICES[*]} " in *" $s "*) ;; *) continue ;; esac
+        [ -f "$LIB_ROOT/$s/libtranslatekit.a" ] && inputs+=("$LIB_ROOT/$s/libtranslatekit.a")
+    done
+    [ "${#inputs[@]}" -eq 0 ] && return 0
+    lipo_universal "$out" "${inputs[@]}"
+    XCF_ARGS+=(-library "$out" -headers "$HEADERS_STAGE")
+}
+
+add_platform "$LIB_ROOT/macos/libtranslatekit.a"        macos-arm64 macos-x86_64
+add_platform "$LIB_ROOT/ios-device/libtranslatekit.a"   ios-arm64
+add_platform "$LIB_ROOT/iossimulator/libtranslatekit.a" iossim-arm64 iossim-x86_64
+
+if [ "${#XCF_ARGS[@]}" -eq 0 ]; then
+    echo "error: no slices were built; nothing to assemble" >&2
+    exit 1
+fi
+
 echo "==> assemble TranslateKit.xcframework"
 rm -rf "$XCFRAMEWORK"
-xcrun xcodebuild -create-xcframework \
-    -library "$MACOS_UNIVERSAL"  -headers "$HEADERS_STAGE" \
-    -library "$IOS_DEVICE"       -headers "$HEADERS_STAGE" \
-    -library "$IOSSIM_UNIVERSAL" -headers "$HEADERS_STAGE" \
-    -output "$XCFRAMEWORK"
+xcrun xcodebuild -create-xcframework "${XCF_ARGS[@]}" -output "$XCFRAMEWORK"
 
 echo
-echo "all Apple slices built and verified; XCFramework assembled:"
+echo "Apple slices built and verified (${REQUESTED_SLICES[*]}); XCFramework assembled:"
 echo "  $XCFRAMEWORK"
 echo "  platforms: $(ls "$XCFRAMEWORK" | grep -v Info.plist | tr '\n' ' ')"
 echo
 echo "Run the Swift goldens (macOS host):"
 echo "  TK_TEST_MODEL_DIR=\"$MODEL_DIR\" swift test --package-path \"$REPO_ROOT/apple\""
-echo "Run the iOS-simulator goldens:"
-echo "  xcodebuild test -scheme TranslateKit-Package \\"
-echo "    -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \\"
-echo "    TK_TEST_MODEL_DIR=\"$MODEL_DIR\"  # (set via scheme env / xcconfig)"
+echo "Run the iOS-simulator goldens (boot a sim, inject the model dir, then test):"
+echo "  SIM=<booted-arm64-sim-udid>"
+echo "  xcrun simctl spawn \"\$SIM\" launchctl setenv TK_TEST_MODEL_DIR \"$MODEL_DIR\""
+echo "  ( cd \"$REPO_ROOT/apple\" && xcodebuild test -scheme TranslateKit \\"
+echo "      -destination \"platform=iOS Simulator,id=\$SIM\" )"
