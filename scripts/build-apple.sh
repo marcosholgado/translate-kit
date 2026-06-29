@@ -368,10 +368,13 @@ echo "Apple slices built and verified (${REQUESTED_SLICES[*]}); XCFramework asse
 echo "  $XCFRAMEWORK"
 echo "  platforms: $(ls "$XCFRAMEWORK" | grep -v Info.plist | tr '\n' ' ')"
 echo
+# The root Package.swift defaults to the remote release XCFramework; set
+# TRANSLATEKIT_LOCAL_XCFRAMEWORK=1 to test against the slice just built here.
 echo "Run the Swift goldens (macOS host):"
-echo "  TK_TEST_MODEL_DIR=\"$MODEL_DIR\" swift test --package-path \"$REPO_ROOT/apple\""
+echo "  TRANSLATEKIT_LOCAL_XCFRAMEWORK=1 TK_TEST_MODEL_DIR=\"$MODEL_DIR\" \\"
+echo "    swift test --package-path \"$REPO_ROOT\""
 echo "Run the iOS-simulator goldens (boot a sim, inject the model dir, then test):"
 echo "  SIM=<booted-arm64-sim-udid>"
 echo "  xcrun simctl spawn \"\$SIM\" launchctl setenv TK_TEST_MODEL_DIR \"$MODEL_DIR\""
-echo "  ( cd \"$REPO_ROOT/apple\" && xcodebuild test -scheme TranslateKit \\"
-echo "      -destination \"platform=iOS Simulator,id=\$SIM\" )"
+echo "  ( cd \"$REPO_ROOT\" && TRANSLATEKIT_LOCAL_XCFRAMEWORK=1 xcodebuild test \\"
+echo "      -scheme TranslateKit -destination \"platform=iOS Simulator,id=\$SIM\" )"

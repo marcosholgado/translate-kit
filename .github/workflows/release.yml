@@ -12,46 +12,77 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Publishes the AAR to GitHub Packages on a version tag.
+# One manual workflow that releases EVERY platform at one shared version.
 #
-# Tag a CI-green commit on main as v<version> (e.g. v0.1.0) and push it; this
-# workflow builds the release AAR for BOTH shipped ABIs (arm64-v8a + x86_64) and
-# publishes it to GitHub Packages as
-# io.github.marcosholgado:translate-kit-android:<version>.
+# Run it from the Actions tab ("Release" -> "Run workflow") and type the version
+# (digits only, NO leading 'v'; the tag v<version> is created for you). It then:
+#   - publishes the Android AAR to GitHub Packages at that version,
+#   - builds the Apple XCFramework, zips it, and uploads it as a GitHub Release
+#     asset, computing its checksum,
+#   - writes that version + the asset checksum into the root Package.swift (so the
+#     tag's tree carries the checksum matching the published zip) and the neutral
+#     VERSION file, commits "Release v<version>", and creates the tag + Release.
 #
-# The artifact version comes from android/version.properties (VERSION_NAME); the
-# tag must match it (the guard below fails fast otherwise). The release build
-# bundles no model assets — they are debug/test-only (see the android module's
-# source-set mapping) — so this job intentionally does NOT fetch the test model.
+# CI is the sole builder and CREATES the tag (no force-moving), which sidesteps the
+# binary-SwiftPM chicken-and-egg: a consumer that pins v<version> checks out a tree
+# whose Package.swift already points at the matching prebuilt artifact.
 
 name: Release
 
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release — digits only, NO leading 'v' (e.g. 0.1.0). The tag v<version> is created for you."
+        required: true
+        type: string
 
 permissions:
-  contents: read
-  packages: write
+  contents: write   # commit the release state, push, create the tag + Release
+  packages: write   # publish the AAR to GitHub Packages
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Publish AAR to GitHub Packages
+  prepare:
+    name: Validate version
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify tag matches version.properties
-        if: github.ref_type == 'tag'
+      - name: Validate version + ensure the tag is free
+        id: v
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
-          version="$(sed -n 's/^VERSION_NAME=//p' android/version.properties)"
-          tag="${GITHUB_REF_NAME#v}"
-          echo "version.properties=$version  tag=$tag"
-          if [ "$version" != "$tag" ]; then
-            echo "::error::Tag '$GITHUB_REF_NAME' does not match VERSION_NAME '$version' in android/version.properties"
+          set -euo pipefail
+          if [[ "$VERSION" == v* ]]; then
+            echo "::error::Enter the version WITHOUT the leading 'v' (you entered '$VERSION' — use '${VERSION#v}')."
             exit 1
           fi
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must be semver MAJOR.MINOR.PATCH (e.g. 0.1.0), got '$VERSION'."
+            exit 1
+          fi
+          TAG="v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists — bump the version."
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  android:
+    name: Publish AAR (GitHub Packages)
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
       - name: Init engine submodules
         run: |
@@ -80,10 +111,118 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "ndk;28.2.13676358" "cmake;3.22.1"
 
-      # Builds the engine for both shipped ABIs (no -PtestAbi), then publishes.
-      # ~20+ min cold (two native engine builds); acceptable for a tag release.
+      # Builds the engine for both shipped ABIs, then publishes the AAR at the
+      # release version (-PVERSION_NAME overrides the VERSION-file default).
       - name: Publish to GitHub Packages
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: cd android && ./gradlew :translate-kit:publish --no-daemon
+        run: |
+          cd android && ./gradlew :translate-kit:publish --no-daemon \
+            -PVERSION_NAME="${{ needs.prepare.outputs.version }}"
+
+  apple:
+    name: Build XCFramework
+    needs: prepare
+    runs-on: macos-latest
+    outputs:
+      checksum: ${{ steps.zip.outputs.checksum }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Init engine submodules
+        run: |
+          git submodule update --init --recursive third_party/cld2
+          git submodule update --init third_party/translations
+          git -C third_party/translations submodule update --init --recursive \
+            inference/3rd_party/ssplit-cpp \
+            inference/marian-fork/src/3rd_party/sentencepiece \
+            inference/marian-fork/src/3rd_party/intgemm \
+            inference/marian-fork/src/3rd_party/ruy \
+            inference/marian-fork/src/3rd_party/simd_utils
+
+      - name: Apply engine patches
+        run: bash scripts/apply-engine-patches.sh
+
+      - name: Install Ninja
+        run: brew install ninja
+
+      # Build the full, shippable XCFramework (universal macOS + Intel, iOS device,
+      # universal simulator). Point the toolchain at Homebrew (the Android-SDK
+      # default in build-apple.sh is absent on the runner).
+      - name: Build XCFramework (all slices)
+        run: |
+          export CMAKE_BIN="$(command -v cmake)"
+          export NINJA_BIN="$(command -v ninja)"
+          scripts/build-apple.sh
+
+      - name: Zip + checksum
+        id: zip
+        working-directory: apple/build
+        env:
+          # compute-checksum runs inside the package tree; pin the local binary so
+          # manifest evaluation never tries to fetch the not-yet-published release.
+          TRANSLATEKIT_LOCAL_XCFRAMEWORK: "1"
+        run: |
+          set -euo pipefail
+          ditto -c -k --keepParent TranslateKit.xcframework TranslateKit.xcframework.zip
+          checksum="$(swift package compute-checksum TranslateKit.xcframework.zip)"
+          echo "$checksum" > TranslateKit.xcframework.zip.checksum.txt
+          echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
+          echo "Checksum: $checksum"
+
+      - name: Upload XCFramework artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-xcframework
+          path: |
+            apple/build/TranslateKit.xcframework.zip
+            apple/build/TranslateKit.xcframework.zip.checksum.txt
+          retention-days: 1
+
+  release:
+    name: Tag + GitHub Release
+    needs: [prepare, android, apple]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Apple artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: apple-xcframework
+          path: dist
+
+      - name: Stamp version + checksum, commit, tag, release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          CHECKSUM: ${{ needs.apple.outputs.checksum }}
+          ASSET: TranslateKit.xcframework.zip
+        run: |
+          set -euo pipefail
+
+          # 1. Point the root Package.swift at this release's asset + checksum, and
+          #    record the version in the neutral VERSION file.
+          echo "$VERSION" > VERSION
+          sed -i -E \
+            -e "s#(releases/download/)v[0-9]+\.[0-9]+\.[0-9]+(/${ASSET})#\1${TAG}\2#" \
+            -e "s#(checksum: \")[0-9a-f]{64}(\")#\1${CHECKSUM}\2#" \
+            Package.swift
+          grep -q "download/${TAG}/${ASSET}" Package.swift
+          grep -q "checksum: \"${CHECKSUM}\"" Package.swift
+
+          # 2. Commit the release state on the current branch and tag THAT commit,
+          #    so a consumer pinning ${TAG} resolves a tree whose Package.swift
+          #    carries the checksum matching the published zip.
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION Package.swift
+          git commit -m "Release ${TAG}"
+          git push origin "HEAD:${{ github.ref_name }}"
+          SHA="$(git rev-parse HEAD)"
+
+          # 3. Create the tag + Release at that commit, attaching the zip + checksum.
+          gh release create "$TAG" --target "$SHA" --generate-notes \
+            "dist/${ASSET}" "dist/${ASSET}.checksum.txt"

@@ -20,13 +20,13 @@ plugins {
     id 'maven-publish'
 }
 
-def versionProps = new Properties()
-file("${rootDir}/version.properties").withInputStream { versionProps.load(it) }
-
 ext {
     GROUP_ID = 'io.github.marcosholgado'
     ARTIFACT_ID = 'translate-kit-android'
-    VERSION_NAME = versionProps.getProperty('VERSION_NAME')
+    // Version single source of truth: the platform-neutral repo-root VERSION file
+    // (rootDir is the android/ Gradle project, so go up one). A -PVERSION_NAME
+    // override wins — that is how the release workflow stamps the published version.
+    VERSION_NAME = project.findProperty('VERSION_NAME') ?: file("${rootDir}/../VERSION").text.trim()
 }
 
 android {

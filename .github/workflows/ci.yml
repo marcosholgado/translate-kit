@@ -172,10 +172,13 @@ jobs:
           export NINJA_BIN="$(command -v ninja)"
           scripts/build-apple.sh macos-arm64 iossim-arm64
 
+      # The root Package.swift defaults to the remote release XCFramework; set
+      # TRANSLATEKIT_LOCAL_XCFRAMEWORK=1 so it resolves the slice we just built.
       - name: Swift goldens (macOS host)
         run: |
+          TRANSLATEKIT_LOCAL_XCFRAMEWORK=1 \
           TK_TEST_MODEL_DIR="$PWD/models/test-models/ende.student.tiny11" \
-            swift test --package-path apple
+            swift test
 
       - name: Swift goldens (iOS simulator)
         run: |
@@ -189,5 +192,5 @@ jobs:
           # model dir into the booted sim's environment via launchctl.
           xcrun simctl spawn "$SIM_ID" launchctl setenv TK_TEST_MODEL_DIR \
             "$PWD/models/test-models/ende.student.tiny11"
-          ( cd apple && xcrun xcodebuild test -scheme TranslateKit \
-              -destination "platform=iOS Simulator,id=$SIM_ID" )
+          TRANSLATEKIT_LOCAL_XCFRAMEWORK=1 xcrun xcodebuild test -scheme TranslateKit \
+            -destination "platform=iOS Simulator,id=$SIM_ID"
